@@ -1,0 +1,10 @@
+# Build artifacts (for generated projects)
+build/
+# IDE
+.idea/
+.vs/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
