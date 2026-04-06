@@ -13,7 +13,10 @@
 3. TASK_PROTOCOL.md    ← 如何拆解任务、按什么顺序推进
 4. IO_MAP.md           ← 从哪里读输入，往哪里写输出
 5. （执行工作）
-6. REVIEW.md           ← 标记完成前的检查清单
+6. linters/checks.md   ← 机械化检查（构建后、审查前）
+7. REVIEW.md           ← 标记完成前的检查清单
+*  META.md             ← 版本、假设清单、边界声明（维护时读）
+*  roles/evaluator.md  ← 独立评估者角色（集成验证时读）
 ```
 
 ---
