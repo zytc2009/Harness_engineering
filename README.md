@@ -77,10 +77,22 @@ Harness_engineering/
 │       ├── windows.md
 │       ├── macos.md
 │       └── android.md
-└── skills/
-    └── auto-dev/              # Claude Code skill：C++ 自动化闭环开发
-        ├── SKILL.md
-        └── TASK_STATE_TEMPLATE.md
+├── harness-runtime/           # 可运行的多 Agent 引擎（Python + LangGraph）
+│   ├── .env.example           # 多 Provider 配置模板
+│   ├── config.py              # 多 Provider LLM 工厂
+│   ├── guard.py               # 3 级安全守卫
+│   ├── memory.py              # 跨会话长期记忆
+│   ├── tools.py               # 6 个沙箱工具
+│   ├── prompts.py             # 三角色系统提示
+│   ├── orchestrator.py        # LangGraph 多 Agent 状态机
+│   ├── main.py                # CLI 入口
+│   └── tests/                 # 70 个测试
+├── skills/
+│   └── auto-dev/              # Claude Code skill：C++ 自动化闭环开发
+│       ├── SKILL.md
+│       └── TASK_STATE_TEMPLATE.md
+└── docs/
+    └── superpowers/plans/     # 实现计划文档
 ```
 
 ---
@@ -172,39 +184,76 @@ echo "> 全新智能体请先读 \`harness/HARNESS.md\`。" >> AGENTS.md
 
 ---
 
-## harness-runtime（计划中）
+## harness-runtime
 
 基于 [microharness](https://github.com/jingw2/microharness) 整合的可运行多 Agent 引擎，将本项目的文档驱动设计与代码驱动运行时结合。
 
-### 设计目标
+### 特性
 
-| 维度 | 说明 |
+| 特性 | 说明 |
 |------|------|
-| 多 Provider | 10+ 供应商支持：Anthropic、OpenAI、DeepSeek、Kimi、Qwen、GLM、MiniMax、Xiaomi、Ollama、Custom |
+| 多 Provider | 10+ 供应商：Anthropic、OpenAI、DeepSeek、Kimi、Qwen、GLM、MiniMax、Xiaomi、Ollama、Custom |
 | 多 Agent 闭环 | architect → implementer → tester 自动循环，失败自动修复（最多 N 轮） |
 | 安全守卫 | 3 级分类：auto-approve / always-confirm / keyword-check |
 | 跨会话记忆 | 自动提炼会话要点，下次启动时注入上下文 |
 | 沙箱隔离 | 所有文件操作限定在临时目录内 |
+| 测试覆盖 | 70 个测试，76% 覆盖率 |
 
-### 架构（6 层，~800 行）
+### 快速开始
 
+```bash
+cd harness-runtime
+pip install -r requirements.txt
+cp .env.example .env
+# 编辑 .env，填入 Provider 和 API Key
+
+python main.py                    # 多 Agent 模式（architect → implementer → tester）
+python main.py --single           # 单 Agent 模式
+python main.py --phase tester     # 从指定阶段开始
 ```
-harness-runtime/
-├── config.py             # 多 Provider LLM 工厂（.env 驱动）
-├── prompts.py            # 三角色系统提示 + 长期记忆注入
-├── tools.py              # 6 个沙箱工具，路径穿越防护
-├── guard.py              # 3 级安全分类 + 人工确认
-├── orchestrator.py       # LangGraph 多 Agent 状态机
-├── memory.py             # 跨会话持久化（memory.json）
-└── main.py               # CLI 入口，支持 --single / --phase 参数
+
+### Provider 配置示例
+
+```bash
+# Anthropic（默认）
+PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_key
+MAIN_MODEL=claude-sonnet-4-20250514
+
+# DeepSeek
+PROVIDER=deepseek
+OPENAI_COMPATIBLE_API_KEY=your_key
+MAIN_MODEL=deepseek-chat
+
+# Ollama（本地模型）
+PROVIDER=ollama
+MAIN_MODEL=gemma4:26b-a4b-it-q4_K_M
+OPENAI_COMPATIBLE_API_KEY=ollama
+
+# 任意 OpenAI 兼容 API
+PROVIDER=custom
+OPENAI_COMPATIBLE_BASE_URL=https://your-api/v1
+OPENAI_COMPATIBLE_API_KEY=your_key
 ```
+
+### 架构（7 层，~800 行）
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| Config | `config.py` | 读 `.env`，按 Provider 构建 LLM 实例 |
+| Prompts | `prompts.py` | 三角色系统提示 + 长期记忆注入 |
+| Tools | `tools.py` | 6 个沙箱工具，路径穿越防护 |
+| Guard | `guard.py` | 3 级安全分类 + 人工确认 |
+| Orchestrator | `orchestrator.py` | LangGraph 多 Agent 状态机 |
+| Memory | `memory.py` | 跨会话持久化（`memory.json`） |
+| CLI | `main.py` | 入口，支持 `--single` / `--phase` 参数 |
 
 ### 与 microharness 的关系
 
-| 来源 | 本项目贡献 |
-|------|-----------|
-| microharness 提供 | 单 Agent 运行时引擎、多 Provider 配置、安全守卫、跨会话记忆 |
-| 本项目扩展 | 多 Agent 闭环（架构师→工程师→QA）、角色系统、Ollama 本地模型支持 |
+| 来源 | 贡献 |
+|------|------|
+| microharness 提供 | 单 Agent 运行时引擎、多 Provider 配置模式、安全守卫、跨会话记忆 |
+| 本项目扩展 | 多 Agent 闭环（架构师→工程师→QA）、角色提示系统、Ollama 本地模型支持 |
 
 详细实现计划见 [`docs/superpowers/plans/2026-04-07-harness-runtime-integration.md`](docs/superpowers/plans/2026-04-07-harness-runtime-integration.md)
 
