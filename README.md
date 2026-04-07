@@ -172,9 +172,48 @@ echo "> 全新智能体请先读 \`harness/HARNESS.md\`。" >> AGENTS.md
 
 ---
 
+## harness-runtime（计划中）
+
+基于 [microharness](https://github.com/jingw2/microharness) 整合的可运行多 Agent 引擎，将本项目的文档驱动设计与代码驱动运行时结合。
+
+### 设计目标
+
+| 维度 | 说明 |
+|------|------|
+| 多 Provider | 10+ 供应商支持：Anthropic、OpenAI、DeepSeek、Kimi、Qwen、GLM、MiniMax、Xiaomi、Ollama、Custom |
+| 多 Agent 闭环 | architect → implementer → tester 自动循环，失败自动修复（最多 N 轮） |
+| 安全守卫 | 3 级分类：auto-approve / always-confirm / keyword-check |
+| 跨会话记忆 | 自动提炼会话要点，下次启动时注入上下文 |
+| 沙箱隔离 | 所有文件操作限定在临时目录内 |
+
+### 架构（6 层，~800 行）
+
+```
+harness-runtime/
+├── config.py             # 多 Provider LLM 工厂（.env 驱动）
+├── prompts.py            # 三角色系统提示 + 长期记忆注入
+├── tools.py              # 6 个沙箱工具，路径穿越防护
+├── guard.py              # 3 级安全分类 + 人工确认
+├── orchestrator.py       # LangGraph 多 Agent 状态机
+├── memory.py             # 跨会话持久化（memory.json）
+└── main.py               # CLI 入口，支持 --single / --phase 参数
+```
+
+### 与 microharness 的关系
+
+| 来源 | 本项目贡献 |
+|------|-----------|
+| microharness 提供 | 单 Agent 运行时引擎、多 Provider 配置、安全守卫、跨会话记忆 |
+| 本项目扩展 | 多 Agent 闭环（架构师→工程师→QA）、角色系统、Ollama 本地模型支持 |
+
+详细实现计划见 [`docs/superpowers/plans/2026-04-07-harness-runtime-integration.md`](docs/superpowers/plans/2026-04-07-harness-runtime-integration.md)
+
+---
+
 ## 延伸阅读
 
 - `Agent.md` — 多 Agent 协作与自动闭环设计的完整方案分析
 - `harness-template/使用说明.md` — 通用模板的填写规则与常见问题
 - `harness-cpp/HARNESS.md` — C++20 项目专属决策树与不变量
 - `skills/auto-dev/SKILL.md` — auto-dev skill 完整规格与验证状态
+- `docs/superpowers/plans/` — 实现计划文档
