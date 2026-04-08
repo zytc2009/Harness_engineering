@@ -236,6 +236,48 @@ OPENAI_COMPATIBLE_BASE_URL=https://your-api/v1
 OPENAI_COMPATIBLE_API_KEY=your_key
 ```
 
+### 多 Provider 并行（每个 Agent 用不同模型）
+
+每个 Agent 阶段可独立配置 Provider、模型和 Key，未设置的项自动回退到全局配置：
+
+| 变量 | 说明 |
+|------|------|
+| `{PHASE}_PROVIDER` | 该阶段的 Provider（如 `ARCHITECT_PROVIDER=anthropic`） |
+| `{PHASE}_MODEL` | 该阶段的模型 ID |
+| `{PHASE}_API_KEY` | 该阶段的 API Key |
+| `{PHASE}_BASE_URL` | 该阶段的 base URL（可选，已内置常用 Provider） |
+| `{PHASE}_USER_AGENT` | 自定义 User-Agent（见下方风险提示） |
+
+`PHASE` 取值：`ARCHITECT` / `IMPLEMENTER` / `TESTER`
+
+```bash
+# 示例：架构师用 Claude 推理，工程师用 Kimi，测试员用 MiniMax
+PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+
+ARCHITECT_PROVIDER=anthropic
+ARCHITECT_MODEL=claude-opus-4-6
+
+IMPLEMENTER_PROVIDER=kimi
+IMPLEMENTER_MODEL=moonshot-v1-8k
+IMPLEMENTER_API_KEY=sk-...
+
+TESTER_PROVIDER=minimax
+TESTER_MODEL=MiniMax-M2.7
+TESTER_API_KEY=sk-...
+```
+
+> **User-Agent 伪装（高风险）**
+>
+> 部分 API（如 Kimi For Coding）限制只允许特定客户端调用。`{PHASE}_USER_AGENT` 可注入自定义 UA 绕过此限制。
+> **推荐优先申请无限制的标准 API Key**，确实只有受限 Key 时可用此方式，但需知悉：
+> - 可能违反服务商 ToS，账号存在封禁风险
+> - 服务商可能随时加强校验导致失效
+>
+> ```bash
+> IMPLEMENTER_USER_AGENT=claude-code/1.0
+> ```
+
 ### 架构（7 层，~800 行）
 
 | 层 | 文件 | 职责 |

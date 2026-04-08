@@ -65,7 +65,7 @@ def agent_node(state: OrchestratorState) -> dict:
     max_s = state["max_steps"]
     print(f"\n[HARNESS] Step {step}/{max_s} | Phase: {phase} | Thinking...")
 
-    llm = config.get_llm().bind_tools(TOOLS)
+    llm = config.get_llm(phase=phase).bind_tools(TOOLS)
     response = llm.invoke(messages)
 
     return {
