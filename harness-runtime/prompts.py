@@ -67,6 +67,13 @@ Coding Standards:
 - Every error path handled explicitly
 - Immutable patterns: return new objects instead of mutating
 
+C++ specific — MANDATORY:
+- `#include` every standard header for each function you use:
+  `<cmath>` for floor/ceil/pow/sqrt/abs, `<algorithm>` for min/max/sort,
+  `<stdexcept>` for std::runtime_error, `<sstream>` for std::ostringstream, etc.
+- Add `#pragma once` to every header file.
+- Never use `using namespace std;` — qualify all std names explicitly.
+
 Output Format:
 Output each file using this exact format — the harness parses it to write files to disk:
 

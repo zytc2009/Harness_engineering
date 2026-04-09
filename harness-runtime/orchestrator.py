@@ -200,12 +200,21 @@ def _detect_language(impl_files: dict[str, str]) -> str:
 
 
 def _build_env() -> dict:
-    """Return os.environ extended with MSYS2 build tool paths."""
+    """Return os.environ extended with MSYS2 build tool paths.
+
+    Also ensures TMPDIR/TMP/TEMP point to the user temp directory so that
+    MSYS2's GCC can create intermediate files without hitting C:\\Windows\\.
+    """
     env = os.environ.copy()
     extra = [r"D:\msys64\mingw64\bin", r"D:\msys64\usr\bin"]
     env["PATH"] = os.pathsep.join(
         p for p in extra + env.get("PATH", "").split(os.pathsep) if p
     )
+    # GCC (MSYS2) uses TMPDIR; fall back to tempfile.gettempdir() if unset.
+    tmp = tempfile.gettempdir()
+    env.setdefault("TMPDIR", tmp)
+    env.setdefault("TMP", tmp)
+    env.setdefault("TEMP", tmp)
     return env
 
 
