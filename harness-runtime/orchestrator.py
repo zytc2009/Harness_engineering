@@ -178,8 +178,92 @@ def implementer_phase(task: str, design: str, feedback: str = "") -> dict[str, s
     return files
 
 
+_CPP_EXTS  = {".cpp", ".cc", ".cxx", ".c", ".h", ".hpp"}
+_SH_EXTS   = {".sh", ".bash"}
+_GO_EXTS   = {".go"}
+_PY_EXTS   = {".py"}
+
+
+def _detect_language(impl_files: dict[str, str]) -> str:
+    """Infer primary implementation language from non-test file extensions."""
+    counts: dict[str, int] = {}
+    for name in impl_files:
+        ext = Path(name).suffix.lower()
+        counts[ext] = counts.get(ext, 0) + 1
+
+    for ext in sorted(counts, key=lambda e: -counts[e]):
+        if ext in _CPP_EXTS:  return "cpp"
+        if ext in _SH_EXTS:   return "shell"
+        if ext in _GO_EXTS:   return "go"
+        if ext in _PY_EXTS:   return "python"
+    return "unknown"
+
+
+def _build_env() -> dict:
+    """Return os.environ extended with MSYS2 build tool paths."""
+    env = os.environ.copy()
+    extra = [r"D:\msys64\mingw64\bin", r"D:\msys64\usr\bin"]
+    env["PATH"] = os.pathsep.join(
+        p for p in extra + env.get("PATH", "").split(os.pathsep) if p
+    )
+    return env
+
+
+def _run_test(test_path: Path) -> tuple[int, str]:
+    """Execute a test file and return (returncode, combined output).
+
+    Dispatch rules:
+      .py          → python -c wrapper  (sandbox at end of sys.path)
+      .sh / .bash  → bash
+      .cpp / .cc   → g++ compile then run
+    """
+    ext = test_path.suffix.lower()
+    env = _build_env()
+    timeout = 60
+
+    try:
+        if ext in _PY_EXTS:
+            wrapper = (
+                "import sys\n"
+                f"__file__ = {str(test_path)!r}\n"
+                f"sys.path = [p for p in sys.path if p] + [{str(SANDBOX)!r}]\n"
+                f"exec(compile(open(__file__).read(), __file__, 'exec'))\n"
+            )
+            r = subprocess.run(
+                [sys.executable, "-c", wrapper],
+                capture_output=True, text=True,
+                cwd=str(SANDBOX), env=env, timeout=timeout,
+            )
+        elif ext in _SH_EXTS:
+            r = subprocess.run(
+                ["bash", str(test_path)],
+                capture_output=True, text=True,
+                cwd=str(SANDBOX), env=env, timeout=timeout,
+            )
+        elif ext in _CPP_EXTS:
+            bin_path = SANDBOX / "test_bin"
+            cr = subprocess.run(
+                ["g++", "-std=c++17", "-o", str(bin_path), str(test_path)],
+                capture_output=True, text=True,
+                cwd=str(SANDBOX), env=env, timeout=timeout,
+            )
+            if cr.returncode != 0:
+                return cr.returncode, cr.stdout + cr.stderr
+            r = subprocess.run(
+                [str(bin_path)],
+                capture_output=True, text=True,
+                cwd=str(SANDBOX), env=env, timeout=timeout,
+            )
+        else:
+            return 1, f"Unsupported test file extension: {ext}"
+    except subprocess.TimeoutExpired:
+        return 1, f"Test execution timed out after {timeout}s."
+
+    return r.returncode, r.stdout + r.stderr
+
+
 def tester_phase(task: str, design: str, code_files: dict[str, str]) -> tuple[bool, str]:
-    """One LLM call → test_impl.py generated → executed locally.
+    """One LLM call → test file generated → executed locally.
 
     Returns:
         (passed, report) where report is stdout+stderr from test execution,
@@ -187,12 +271,14 @@ def tester_phase(task: str, design: str, code_files: dict[str, str]) -> tuple[bo
     """
     print("\n[HARNESS] Phase: tester")
 
-    # Build context block with all implementation files (any language)
     impl_files = {
         name: content
         for name, content in sorted(code_files.items())
         if not name.startswith("test_")
     }
+    lang = _detect_language(impl_files)
+    print(f"  → detected language: {lang}")
+
     files_block = "\n\n".join(
         f"## FILE: {name}\n```\n{content}\n```"
         for name, content in impl_files.items()
@@ -200,6 +286,7 @@ def tester_phase(task: str, design: str, code_files: dict[str, str]) -> tuple[bo
 
     prompt = (
         f"Task: {task}\n\n"
+        f"## Implementation Language\n{lang}\n\n"
         f"## Design Document\n{design}\n\n"
         f"## Implementation\n{files_block}"
     )
@@ -209,60 +296,28 @@ def tester_phase(task: str, design: str, code_files: dict[str, str]) -> tuple[bo
         HumanMessage(content=prompt),
     ])
 
-    # Try to execute a generated test file
+    # Find first test_* file of any extension in the LLM output
     test_files = _parse_files(text)
-    test_content = test_files.get("test_impl.py") or next(
-        (v for k, v in test_files.items() if k.startswith("test_")), None
+    test_name, test_content = next(
+        ((k, v) for k, v in test_files.items() if k.startswith("test_")),
+        (None, None),
     )
 
     if test_content:
-        test_path = SANDBOX / "test_impl.py"
+        test_path = SANDBOX / test_name
         test_path.write_text(test_content, encoding="utf-8")
-        print("  → test_impl.py written, executing...")
-        # Run via wrapper that puts sandbox AFTER stdlib in sys.path.
-        # Without this, project files like token.py shadow stdlib modules
-        # (e.g. token → tokenize → linecache → ImportError).
-        # Also sets __file__ explicitly — not available under python -c.
-        wrapper = (
-            "import sys\n"
-            f"__file__ = {str(test_path)!r}\n"
-            f"sys.path = [p for p in sys.path if p] + [{str(SANDBOX)!r}]\n"
-            f"exec(compile(open(__file__).read(), __file__, 'exec'))\n"
-        )
-        # Augment PATH with common build tool locations so C++/make/etc. work.
-        _env = os.environ.copy()
-        _extra_paths = [
-            r"D:\msys64\mingw64\bin",
-            r"D:\msys64\usr\bin",
-        ]
-        _env["PATH"] = os.pathsep.join(
-            p for p in _extra_paths + _env.get("PATH", "").split(os.pathsep)
-            if p
-        )
-        try:
-            result = subprocess.run(
-                [sys.executable, "-c", wrapper],
-                capture_output=True,
-                text=True,
-                cwd=str(SANDBOX),
-                env=_env,
-                timeout=60,
-            )
-        except subprocess.TimeoutExpired:
-            print("  → TIMEOUT (60s)")
-            return False, "Test execution timed out after 60 seconds."
+        print(f"  → {test_name} written, executing...")
 
-        output = result.stdout + result.stderr
-        passed = result.returncode == 0
-        print(f"  → {'PASSED' if passed else 'FAILED'} (exit {result.returncode})")
+        returncode, output = _run_test(test_path)
+        passed = returncode == 0
+        print(f"  → {'PASSED' if passed else 'FAILED'} (exit {returncode})")
         if not passed and output:
             print(f"  → Output:\n{output[:500]}")
         return passed, output
 
     # No test file found — fall back to LLM text verdict
     passed = "ALL TESTS PASSED" in text.upper()
-    label = "PASSED" if passed else "FAILED"
-    print(f"  → {label} (text verdict — no test file generated)")
+    print(f"  → {'PASSED' if passed else 'FAILED'} (text verdict — no test file generated)")
     return passed, text
 
 
