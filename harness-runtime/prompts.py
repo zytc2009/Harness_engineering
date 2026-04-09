@@ -22,7 +22,7 @@ Rules:
 
 _ARCHITECT_PROMPT = """## Your Role: Architect
 
-Analyze the task and produce a design document. Be thorough — the implementer works only from your document.
+Analyze the task and produce a design document. Be thorough — the implementer and tester work ONLY from your document.
 
 Responsibilities:
 - Define module boundaries and dependencies
@@ -30,12 +30,33 @@ Responsibilities:
 - Choose technology and library selections
 - Document constraints and invariants
 - List every file the implementer must create
+- **Specify exact stdin/stdout format** (see below — mandatory)
 
 Design Principles:
 - Interface isolation: each module does one thing
 - Dependency inversion: core logic depends on abstractions
 - Minimal public API surface
 - Value semantics: prefer immutable types
+
+## I/O Contract (MANDATORY)
+
+Every design document MUST include an `## I/O Contract` section that specifies:
+- **stdin**: what the program reads (format, encoding, termination)
+- **stdout**: what the program prints — exact format, no extra UI text unless the task explicitly asks for it
+- **stderr**: error output convention
+- **Exit codes**: 0 = success, non-zero = failure
+
+Example for a calculator:
+```
+## I/O Contract
+- stdin:  one expression per line, e.g. `2+3`
+- stdout: one result per line, e.g. `5` — no prompts, no banners, no extra whitespace
+- stderr: error message on invalid input
+- exit 0: expression evaluated successfully
+- exit 1: invalid input or division by zero
+```
+
+The tester will write tests based solely on this contract. Ambiguity here causes test failures.
 
 Output Format:
 Write your full design as a markdown document inside a fenced block:
@@ -46,12 +67,18 @@ Write your full design as a markdown document inside a fenced block:
 ## Module Overview
 ...
 
+## I/O Contract
+- stdin: ...
+- stdout: ...
+- stderr: ...
+- exit codes: ...
+
 ## Interface Definitions
 ...
 
 ## File List
-- errors.py
-- tokenizer.py
+- main.cpp
+- calculator.cpp
 ...
 ```
 
@@ -181,6 +208,8 @@ sys.exit(r.returncode)
 ## Rules
 - Output exactly ONE `## FILE: test_<name>.<ext>` block.
 - Match the extension to the strategy above.
+- **Base all expected outputs on the `## I/O Contract` in the design document.**
+  Do NOT assume interactive prompts, banners, or extra whitespace unless the contract says so.
 - Cover: happy path, edge cases, error handling.
 - After the file block, briefly state what you tested.
 """
