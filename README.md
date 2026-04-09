@@ -77,16 +77,17 @@ Harness_engineering/
 │       ├── windows.md
 │       ├── macos.md
 │       └── android.md
-├── harness-runtime/           # 可运行的多 Agent 引擎（Python + LangGraph）
+├── harness-runtime/           # 可运行的多 Agent 一次性流水线引擎
 │   ├── .env.example           # 多 Provider 配置模板
 │   ├── config.py              # 多 Provider LLM 工厂
 │   ├── guard.py               # 3 级安全守卫
 │   ├── memory.py              # 跨会话长期记忆
 │   ├── tools.py               # 6 个沙箱工具
-│   ├── prompts.py             # 三角色系统提示
-│   ├── orchestrator.py        # LangGraph 多 Agent 状态机
-│   ├── main.py                # CLI 入口
-│   └── tests/                 # 70 个测试
+│   ├── prompts.py             # 三角色系统提示（含 I/O Contract 规范）
+│   ├── orchestrator.py        # 流水线调度 + 语言感知测试分发
+│   ├── main.py                # CLI 入口（任务注册/续跑/状态查询）
+│   ├── harness_tasks.json     # 任务状态持久化
+│   └── tests/                 # 测试套件
 ├── skills/
 │   └── auto-dev/              # Claude Code skill：C++ 自动化闭环开发
 │       ├── SKILL.md
@@ -186,7 +187,7 @@ echo "> 全新智能体请先读 \`harness/HARNESS.md\`。" >> AGENTS.md
 
 ## harness-runtime
 
-基于 [microharness](https://github.com/jingw2/microharness) 整合的可运行多 Agent 引擎，将本项目的文档驱动设计与代码驱动运行时结合。
+可运行的多 Agent 一次性流水线引擎。每个阶段向 LLM 发起一次调用，无工具循环，无 ReAct 模式。
 
 ### 特性
 
@@ -194,10 +195,14 @@ echo "> 全新智能体请先读 \`harness/HARNESS.md\`。" >> AGENTS.md
 |------|------|
 | 多 Provider | 10+ 供应商：Anthropic、OpenAI、DeepSeek、Kimi、Qwen、GLM、MiniMax、Xiaomi、Ollama、Custom |
 | 多 Agent 闭环 | architect → implementer → tester 自动循环，失败自动修复（最多 N 轮） |
-| 安全守卫 | 3 级分类：auto-approve / always-confirm / keyword-check |
+| I/O Contract | architect 强制在设计文档中定义 stdin/stdout 格式，消除 implementer/tester 歧义 |
+| 语言感知 tester | 自动检测实现语言，按扩展名分发执行器（Python / bash / C++ g++ 编译） |
+| 任务状态记录 | `harness_tasks.json` 持久化 phase、retry_count、duration_s、error，支持 `--list` 查询 |
+| 思考进度显示 | LLM 推理期间显示进度点，避免用户误以为程序卡住 |
+| 断点续跑 | `--resume <id>` 从 implementer 阶段继续未完成的任务 |
 | 跨会话记忆 | 自动提炼会话要点，下次启动时注入上下文 |
-| 沙箱隔离 | 所有文件操作限定在临时目录内 |
-| 测试覆盖 | 70 个测试，76% 覆盖率 |
+| 沙箱隔离 | 所有文件操作限定在系统临时目录内 |
+| 安全守卫 | 3 级分类：auto-approve / always-confirm / keyword-check |
 
 ### 快速开始
 
@@ -207,9 +212,10 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env，填入 Provider 和 API Key
 
-python main.py                    # 多 Agent 模式（architect → implementer → tester）
-python main.py --single           # 单 Agent 模式
-python main.py --phase tester     # 从指定阶段开始
+python main.py                        # 新任务
+python main.py --list                 # 列出所有历史任务（含状态/耗时/重试数）
+python main.py --resume <task-id>     # 续跑未完成的任务
+python main.py --phase implementer    # 从指定阶段开始
 ```
 
 ### Provider 配置示例
@@ -218,7 +224,7 @@ python main.py --phase tester     # 从指定阶段开始
 # Anthropic（默认）
 PROVIDER=anthropic
 ANTHROPIC_API_KEY=your_key
-MAIN_MODEL=claude-sonnet-4-20250514
+MAIN_MODEL=claude-sonnet-4-6
 
 # DeepSeek
 PROVIDER=deepseek
@@ -278,26 +284,17 @@ TESTER_API_KEY=sk-...
 > IMPLEMENTER_USER_AGENT=claude-code/1.0
 > ```
 
-### 架构（7 层，~800 行）
+### 架构（7 层）
 
 | 层 | 文件 | 职责 |
 |---|---|---|
 | Config | `config.py` | 读 `.env`，按 Provider 构建 LLM 实例 |
-| Prompts | `prompts.py` | 三角色系统提示 + 长期记忆注入 |
+| Prompts | `prompts.py` | 三角色系统提示 + I/O Contract 规范 + 长期记忆注入 |
 | Tools | `tools.py` | 6 个沙箱工具，路径穿越防护 |
 | Guard | `guard.py` | 3 级安全分类 + 人工确认 |
-| Orchestrator | `orchestrator.py` | LangGraph 多 Agent 状态机 |
+| Orchestrator | `orchestrator.py` | 一次性流水线 + 语言感知测试分发 |
 | Memory | `memory.py` | 跨会话持久化（`memory.json`） |
-| CLI | `main.py` | 入口，支持 `--single` / `--phase` 参数 |
-
-### 与 microharness 的关系
-
-| 来源 | 贡献 |
-|------|------|
-| microharness 提供 | 单 Agent 运行时引擎、多 Provider 配置模式、安全守卫、跨会话记忆 |
-| 本项目扩展 | 多 Agent 闭环（架构师→工程师→QA）、角色提示系统、Ollama 本地模型支持 |
-
-详细实现计划见 [`docs/superpowers/plans/2026-04-07-harness-runtime-integration.md`](docs/superpowers/plans/2026-04-07-harness-runtime-integration.md)
+| CLI | `main.py` | 入口，任务注册/续跑/状态查询 |
 
 ---
 
