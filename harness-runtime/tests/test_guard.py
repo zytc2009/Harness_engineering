@@ -16,9 +16,9 @@ class TestClassifyTool:
         assert classify_tool("read_file", {"filename": "x.py"}) == "auto_approve"
         assert classify_tool("get_file_info", {"filename": "x.py"}) == "auto_approve"
 
-    def test_write_tools_are_always_confirm(self):
-        assert classify_tool("write_file", {"filename": "x.py", "content": "hi"}) == "always_confirm"
-        assert classify_tool("delete_file", {"filename": "x.py"}) == "always_confirm"
+    def test_sandbox_tools_are_auto_approve(self):
+        assert classify_tool("write_file", {"filename": "x.py", "content": "hi"}) == "auto_approve"
+        assert classify_tool("delete_file", {"filename": "x.py"}) == "auto_approve"
 
     def test_unknown_tool_safe_content_is_auto_approve(self):
         assert classify_tool("run_python", {"filename": "hello.py"}) == "auto_approve"
@@ -49,9 +49,9 @@ class TestShouldConfirm:
         assert should_confirm("list_files", {}) is False
         assert should_confirm("read_file", {"filename": "x"}) is False
 
-    def test_write_tools_always_confirm(self):
-        assert should_confirm("write_file", {"filename": "x", "content": "y"}) is True
-        assert should_confirm("delete_file", {"filename": "x"}) is True
+    def test_sandbox_tools_no_confirm(self):
+        assert should_confirm("write_file", {"filename": "x", "content": "y"}) is False
+        assert should_confirm("delete_file", {"filename": "x"}) is False
 
     def test_dangerous_content_confirms(self):
         assert should_confirm("run_python", {"content": "os.system('rm -rf /')"}) is True

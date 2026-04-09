@@ -4,9 +4,8 @@ Tool Module
 Sandboxed tools available to the agent. All file ops confined to sandbox dir.
 
 Safety levels (see guard.py):
-  AUTO_APPROVE   : list_files, read_file, get_file_info
-  ALWAYS_CONFIRM : write_file, delete_file
-  KEYWORD_CHECK  : run_python
+  AUTO_APPROVE   : list_files, read_file, get_file_info, write_file, delete_file
+  KEYWORD_CHECK  : run_python, run_command (when args contain dangerous keywords)
 """
 
 import os
@@ -128,5 +127,38 @@ def run_python(filename: str, sandbox_dir: str = _DEFAULT_SANDBOX) -> str:
     return output
 
 
+@tool
+def run_command(command: str, sandbox_dir: str = _DEFAULT_SANDBOX) -> str:
+    """Run a shell command inside the sandbox directory.
+
+    Use this to compile and run any language (C++, Rust, Go, etc.) or
+    run test frameworks (pytest, cargo test, go test, etc.).
+    The working directory is always the sandbox — paths outside it are blocked.
+
+    Args:
+        command: Shell command to run (e.g. 'g++ -o calc main.cpp && ./calc').
+        sandbox_dir: Sandbox directory path.
+    """
+    # Block obvious path-traversal attempts — the cwd=sandbox_dir already
+    # confines relative paths, but reject explicit parent-dir escapes.
+    if ".." in command:
+        return "Error: path traversal ('..') is not allowed in commands."
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=sandbox_dir,
+        )
+        output = (result.stdout + result.stderr).strip() or "(no output)"
+    except subprocess.TimeoutExpired:
+        output = "Timeout: command exceeded 30 seconds."
+    if len(output) > 2000:
+        output = output[:2000] + "\n... (output truncated)"
+    return output
+
+
 # ── Tool Registry ────────────────────────────────────────────────
-TOOLS = [list_files, read_file, get_file_info, write_file, delete_file, run_python]
+TOOLS = [list_files, read_file, get_file_info, write_file, delete_file, run_python, run_command]

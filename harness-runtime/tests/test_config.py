@@ -99,14 +99,12 @@ class TestResolveBaseUrlPerPhase:
         assert _resolve_base_url("deepseek", phase="architect") == "https://arch.api/v1"
 
     def test_global_base_url_used_when_no_phase_override(self, env_vars):
-        env_vars(OPENAI_COMPATIBLE_BASE_URL="https://global.api/v1")
-        os.environ.pop("IMPLEMENTER_BASE_URL", None)
+        env_vars(OPENAI_COMPATIBLE_BASE_URL="https://global.api/v1", IMPLEMENTER_BASE_URL="")
         from config import _resolve_base_url
         assert _resolve_base_url("deepseek", phase="implementer") == "https://global.api/v1"
 
     def test_falls_back_to_default_when_nothing_set(self, env_vars):
-        os.environ.pop("TESTER_BASE_URL", None)
-        os.environ.pop("OPENAI_COMPATIBLE_BASE_URL", None)
+        env_vars(TESTER_BASE_URL="", OPENAI_COMPATIBLE_BASE_URL="")
         from config import _resolve_base_url
         assert "deepseek" in _resolve_base_url("deepseek", phase="tester")
 

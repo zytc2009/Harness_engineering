@@ -8,3 +8,7 @@ build/
 *.swp
 *.swo
 *~
+# Claude Code local config
+.claude/
+# Task state files
+TASK_STATE*.md

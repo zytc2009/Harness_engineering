@@ -102,6 +102,24 @@ def _resolve_api_key(provider: str, phase: str | None = None) -> str:
     return get_setting("OPENAI_COMPATIBLE_API_KEY", "not-needed")
 
 
+_PHASE_DEFAULT_MAX_STEPS: dict[str, int] = {
+    "architect":   10,
+    "implementer": 25,
+    "tester":      15,
+}
+
+
+def _resolve_phase_max_steps(phase: str) -> int:
+    """Resolve max steps for a phase.
+
+    Priority: {PHASE}_MAX_STEPS env var → _PHASE_DEFAULT_MAX_STEPS[phase].
+    """
+    val = os.environ.get(f"{phase.upper()}_MAX_STEPS", "").strip()
+    if val.isdigit():
+        return int(val)
+    return _PHASE_DEFAULT_MAX_STEPS.get(phase, 15)
+
+
 def _resolve_model(phase: str | None = None) -> str:
     """Resolve model name, checking phase-specific override first.
 

@@ -83,9 +83,9 @@ class TestRunPython:
 
 
 class TestToolsRegistry:
-    def test_tools_list_has_six_tools(self):
-        assert len(TOOLS) == 6
+    def test_tools_list_has_seven_tools(self):
+        assert len(TOOLS) == 7
 
     def test_all_tools_have_names(self):
         names = {t.name for t in TOOLS}
-        assert names == {"list_files", "read_file", "get_file_info", "write_file", "delete_file", "run_python"}
+        assert names == {"list_files", "read_file", "get_file_info", "write_file", "delete_file", "run_python", "run_command"}

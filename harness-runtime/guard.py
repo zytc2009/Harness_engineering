@@ -23,15 +23,14 @@ DANGEROUS_KEYWORDS = [
     "os.system(",
 ]
 
-ALWAYS_CONFIRM_TOOLS: frozenset[str] = frozenset({
-    "write_file",
-    "delete_file",
-})
+ALWAYS_CONFIRM_TOOLS: frozenset[str] = frozenset()
 
 AUTO_APPROVE_TOOLS: frozenset[str] = frozenset({
     "list_files",
     "read_file",
     "get_file_info",
+    "write_file",
+    "delete_file",
 })
 
 
