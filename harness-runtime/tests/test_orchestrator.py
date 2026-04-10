@@ -5,17 +5,12 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-# Make sure harness-runtime is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orchestrator import _parse_files, architect_phase, implementer_phase
 from orchestrator import tester_phase as _tester_phase
 from orchestrator import run_pipeline
 
-
-# ── _parse_files ───────────────────────────────────────────────────
 
 class TestParseFiles:
     def test_parses_single_file(self):
@@ -34,8 +29,7 @@ class TestParseFiles:
             y = 2
             ```
         """)
-        result = _parse_files(text)
-        assert result == {"a.py": "x = 1", "b.py": "y = 2"}
+        assert _parse_files(text) == {"a.py": "x = 1", "b.py": "y = 2"}
 
     def test_strips_path_prefix(self):
         text = "## FILE: src/utils/helper.py\n```python\ndef f(): pass\n```"
@@ -60,11 +54,8 @@ class TestParseFiles:
 
     def test_handles_non_python_blocks(self):
         text = "## FILE: README.md\n```markdown\n# Title\n```"
-        result = _parse_files(text)
-        assert result == {"README.md": "# Title"}
+        assert _parse_files(text) == {"README.md": "# Title"}
 
-
-# ── architect_phase ────────────────────────────────────────────────
 
 class TestArchitectPhase:
     def _make_llm_response(self, content: str):
@@ -77,7 +68,6 @@ class TestArchitectPhase:
         with (
             patch("orchestrator.config.get_llm") as mock_get_llm,
             patch("orchestrator.SANDBOX", tmp_path),
-            patch("builtins.input", return_value="yes"),
         ):
             mock_llm = MagicMock()
             mock_llm.invoke.return_value = self._make_llm_response(design_text)
@@ -93,7 +83,6 @@ class TestArchitectPhase:
         with (
             patch("orchestrator.config.get_llm") as mock_get_llm,
             patch("orchestrator.SANDBOX", tmp_path),
-            patch("builtins.input", return_value="yes"),
         ):
             mock_llm = MagicMock()
             mock_llm.invoke.return_value = self._make_llm_response(response)
@@ -103,22 +92,18 @@ class TestArchitectPhase:
 
         assert result == "# Design\ncontent"
 
-    def test_returns_none_when_cancelled(self, tmp_path):
-        with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
-            patch("orchestrator.SANDBOX", tmp_path),
-            patch("builtins.input", return_value="no"),
-        ):
+    def test_respects_explicit_sandbox_dir(self, tmp_path):
+        sandbox_dir = tmp_path / "task-123"
+        with patch("orchestrator.config.get_llm") as mock_get_llm:
             mock_llm = MagicMock()
             mock_llm.invoke.return_value = self._make_llm_response("design text")
             mock_get_llm.return_value = mock_llm
 
-            result = architect_phase("build something")
+            result = architect_phase("build something", sandbox_dir=sandbox_dir)
 
-        assert result is None
+        assert result == "design text"
+        assert (sandbox_dir / "design.md").read_text() == "design text"
 
-
-# ── implementer_phase ──────────────────────────────────────────────
 
 class TestImplementerPhase:
     def test_writes_all_parsed_files(self, tmp_path):
@@ -175,8 +160,6 @@ class TestImplementerPhase:
         assert files == {}
 
 
-# ── tester_phase ───────────────────────────────────────────────────
-
 class TestTesterPhase:
     def test_executes_generated_test_file(self, tmp_path):
         passing_test = textwrap.dedent("""\
@@ -194,7 +177,7 @@ class TestTesterPhase:
             mock_llm.invoke.return_value = MagicMock(content=response)
             mock_get_llm.return_value = mock_llm
 
-            passed, report = _tester_phase("task", "design", {"main.py": "x=1"})
+            passed, _report = _tester_phase("task", "design", {"main.py": "x=1"})
 
         assert passed is True
 
@@ -245,18 +228,7 @@ class TestTesterPhase:
         assert passed is False
 
 
-# ── run_pipeline ───────────────────────────────────────────────────
-
 class TestRunPipeline:
-    def _patch_phases(self, design="design", impl_files=None, test_passed=True):
-        """Patch all three phases for pipeline integration tests."""
-        impl_files = impl_files or {"main.py": "x=1"}
-        return (
-            patch("orchestrator.architect_phase", return_value=design),
-            patch("orchestrator.implementer_phase", return_value=impl_files),
-            patch("orchestrator.tester_phase", return_value=(test_passed, "report")),
-        )
-
     def test_pipeline_passes_on_first_try(self):
         with (
             patch("orchestrator.architect_phase", return_value="design") as mock_arch,
@@ -314,6 +286,76 @@ class TestRunPipeline:
         ):
             run_pipeline("build something", max_retries=3)
 
-        # Second call to implementer should include the feedback
         second_call_kwargs = mock_impl.call_args_list[1][1]
         assert feedback_report in second_call_kwargs.get("feedback", "")
+
+    def test_callback_receives_phase_events(self, tmp_path):
+        events = []
+        with (
+            patch("orchestrator.architect_phase", return_value="design"),
+            patch("orchestrator.implementer_phase", return_value={"main.py": "x"}),
+            patch("orchestrator.tester_phase", return_value=(True, "ok")),
+        ):
+            result = run_pipeline(
+                "build something",
+                max_retries=3,
+                sandbox_dir=tmp_path,
+                on_status=events.append,
+            )
+
+        assert result["phase"] == "done"
+        assert [event["type"] for event in events] == [
+            "phase_started",
+            "phase_finished",
+            "phase_started",
+            "phase_finished",
+            "phase_started",
+            "phase_finished",
+            "pipeline_done",
+        ]
+        assert [event["phase"] for event in events[:6]] == [
+            "architect",
+            "architect",
+            "implementer",
+            "implementer",
+            "tester",
+            "tester",
+        ]
+
+    def test_callback_includes_retry_event(self, tmp_path):
+        events = []
+        with (
+            patch("orchestrator.architect_phase", return_value="design"),
+            patch("orchestrator.implementer_phase", return_value={"main.py": "x"}),
+            patch("orchestrator.tester_phase", side_effect=[(False, "fail"), (True, "ok")]),
+        ):
+            result = run_pipeline(
+                "build something",
+                max_retries=3,
+                sandbox_dir=tmp_path,
+                on_status=events.append,
+            )
+
+        assert result["retry_count"] == 1
+        retry_event = next(event for event in events if event["type"] == "retrying")
+        assert retry_event["phase"] == "implementer"
+        assert retry_event["retry_count"] == 1
+
+    def test_pipeline_uses_provided_sandbox_on_resume(self, tmp_path):
+        sandbox_dir = tmp_path / "task-abc"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "design.md").write_text("design", encoding="utf-8")
+        (sandbox_dir / "main.py").write_text("x=1", encoding="utf-8")
+
+        with (
+            patch("orchestrator.implementer_phase") as mock_impl,
+            patch("orchestrator.tester_phase", return_value=(True, "ok")),
+        ):
+            result = run_pipeline(
+                "build something",
+                start_phase="tester",
+                sandbox_dir=sandbox_dir,
+            )
+
+        assert result["phase"] == "done"
+        mock_impl.assert_not_called()

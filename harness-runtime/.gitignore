@@ -6,3 +6,5 @@ __pycache__/
 .coverage
 checkpoints.db
 harness_tasks.json
+task_queue.json
+status.json

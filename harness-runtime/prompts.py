@@ -14,6 +14,7 @@ PHASES = ("architect", "implementer", "tester")
 _BASE_PROMPT = """You are an AI agent operating inside a safe code-generation harness.
 
 Rules:
+- Work only within the provided sandbox/workspace context.
 - Keep code clean, readable, and well-structured.
 - Use immutable patterns where possible.
 - Handle all error paths explicitly.
@@ -219,6 +220,11 @@ _PHASE_PROMPTS = {
     "implementer": _IMPLEMENTER_PROMPT,
     "tester": _TESTER_PROMPT,
 }
+
+
+def get_prompt_for_phase(phase: str) -> str:
+    """Return the role-specific prompt body for a phase."""
+    return _PHASE_PROMPTS[phase]
 
 
 def get_system_prompt(phase: str) -> str:

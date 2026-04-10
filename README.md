@@ -305,3 +305,36 @@ TESTER_API_KEY=sk-...
 - `harness-cpp/HARNESS.md` — C++20 项目专属决策树与不变量
 - `skills/auto-dev/SKILL.md` — auto-dev skill 完整规格与验证状态
 - `docs/superpowers/plans/` — 实现计划文档
+---
+
+## harness-runtime queue/drain workflow
+
+Phase 1 adds a reliable file-backed queue for `harness-runtime`.
+
+Commands:
+
+```bash
+cd harness-runtime
+
+python main.py --add "[Goal] Build a calculator [Language] Python [Input] stdin expressions [Output] stdout results"
+python main.py --queue
+python main.py --status
+python main.py --drain
+```
+
+Behavior:
+
+- `--add` appends a task to `task_queue.json`
+- `--queue` shows queued items
+- `--status` shows the current worker snapshot from `status.json`
+- `--drain` processes all pending tasks in FIFO order and exits when the queue is empty
+
+Phase 1 is intentionally a drain worker, not a long-running daemon.
+
+Additional files:
+
+- `harness-runtime/task_queue.py`
+- `harness-runtime/status.py`
+- `harness-runtime/TASK_FORMAT.md`
+- `harness-runtime/task_queue.json` runtime state, gitignored
+- `harness-runtime/status.json` runtime state, gitignored
