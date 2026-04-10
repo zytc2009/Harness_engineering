@@ -60,6 +60,8 @@ class TestDrainIntegration:
         assert all(task["status"] == "done" for task in queue)
         status = read_status(status_path)
         assert status["worker_state"] == "idle"
+        assert status["queue_cancelled"] == 0
+        assert status["queue_skipped"] == 0
 
     def test_mixed_success_and_failure_keep_fifo(self, tmp_path):
         queue_path = tmp_path / "q.json"

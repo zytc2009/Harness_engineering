@@ -319,6 +319,8 @@ cd harness-runtime
 python main.py --add "[Goal] Build a calculator [Language] Python [Input] stdin expressions [Output] stdout results"
 python main.py --queue
 python main.py --status
+python main.py --cancel <task-id>
+python main.py --skip <task-id>
 python main.py --drain
 ```
 
@@ -327,9 +329,17 @@ Behavior:
 - `--add` appends a task to `task_queue.json`
 - `--queue` shows queued items
 - `--status` shows the current worker snapshot from `status.json`
+- `--cancel` marks a pending task as cancelled
+- `--skip` marks a pending task as skipped
 - `--drain` processes all pending tasks in FIFO order and exits when the queue is empty
 
 Phase 1 is intentionally a drain worker, not a long-running daemon.
+
+`status.json` also exposes recent lifecycle metadata such as:
+
+- `last_event_type`
+- `last_event_message`
+- `last_task_finished_at`
 
 Additional files:
 

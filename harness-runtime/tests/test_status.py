@@ -37,6 +37,11 @@ class TestUpdateStatus:
             queue_running=1,
             queue_done=4,
             queue_failed=1,
+            queue_cancelled=2,
+            queue_skipped=3,
+            last_event_type="phase_started",
+            last_event_message="architect started",
+            last_task_finished_at="2026-04-10 10:05:00",
             error="boom",
             status_path=path,
         )
@@ -47,6 +52,11 @@ class TestUpdateStatus:
         assert data["queue_running"] == 1
         assert data["queue_done"] == 4
         assert data["queue_failed"] == 1
+        assert data["queue_cancelled"] == 2
+        assert data["queue_skipped"] == 3
+        assert data["last_event_type"] == "phase_started"
+        assert data["last_event_message"] == "architect started"
+        assert data["last_task_finished_at"] == "2026-04-10 10:05:00"
         assert data["error"] == "boom"
 
 

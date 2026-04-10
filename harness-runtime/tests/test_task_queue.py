@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from task_queue import (
     QueueCorruptedError,
     add_task,
+    cancel_task,
     get_task,
     list_queue,
     load_queue,
@@ -17,6 +18,7 @@ from task_queue import (
     next_pending,
     queue_counts,
     save_queue,
+    skip_task,
     update_task,
 )
 
@@ -102,7 +104,19 @@ class TestSelectorsAndCounts:
         b = add_task("b", path)
         update_task(a, queue_path=path, status="running")
         update_task(b, queue_path=path, status="done")
-        assert queue_counts(path) == (0, 1, 1, 0)
+        assert queue_counts(path) == (0, 1, 1, 0, 0, 0)
+
+    def test_next_pending_ignores_cancelled_and_skipped(self, tmp_path):
+        path = tmp_path / "q.json"
+        first = add_task("cancel me", path)
+        second = add_task("skip me", path)
+        third = add_task("run me", path)
+        cancel_task(first, path)
+        skip_task(second, path)
+
+        task = next_pending(path)
+
+        assert task["id"] == third
 
 
 class TestUpdateTask:
@@ -120,6 +134,44 @@ class TestUpdateTask:
         path = tmp_path / "q.json"
         with pytest.raises(KeyError):
             update_task("nonexistent", queue_path=path, status="done")
+
+
+class TestQueueControls:
+    def test_cancel_task_marks_pending_as_cancelled(self, tmp_path):
+        path = tmp_path / "q.json"
+        task_id = add_task("task", path)
+
+        cancel_task(task_id, path)
+
+        task = load_queue(path)[0]
+        assert task["status"] == "cancelled"
+        assert task["finished_at"] is not None
+
+    def test_skip_task_marks_pending_as_skipped(self, tmp_path):
+        path = tmp_path / "q.json"
+        task_id = add_task("task", path)
+
+        skip_task(task_id, path)
+
+        task = load_queue(path)[0]
+        assert task["status"] == "skipped"
+        assert task["finished_at"] is not None
+
+    def test_cancel_task_rejects_non_pending(self, tmp_path):
+        path = tmp_path / "q.json"
+        task_id = add_task("task", path)
+        update_task(task_id, queue_path=path, status="running")
+
+        with pytest.raises(ValueError):
+            cancel_task(task_id, path)
+
+    def test_skip_task_rejects_non_pending(self, tmp_path):
+        path = tmp_path / "q.json"
+        task_id = add_task("task", path)
+        update_task(task_id, queue_path=path, status="done")
+
+        with pytest.raises(ValueError):
+            skip_task(task_id, path)
 
 
 class TestRecovery:

@@ -318,7 +318,7 @@ def run_pipeline(
     retry_count = 0
     target_dir = _resolve_sandbox_dir(sandbox_dir)
 
-    def emit(event_type: str, phase: str | None, error: str | None = None) -> None:
+    def emit(event_type: str, phase: str | None, error: str | None = None, message: str | None = None) -> None:
         if on_status is None:
             return
         on_status({
@@ -326,16 +326,17 @@ def run_pipeline(
             "phase": phase,
             "retry_count": retry_count,
             "error": error,
+            "message": message,
         })
 
     if start_phase == "architect":
-        emit("phase_started", "architect")
+        emit("phase_started", "architect", message="architect started")
         result = architect_phase(task, sandbox_dir=target_dir)
         if result is None:
-            emit("pipeline_cancelled", None)
+            emit("pipeline_cancelled", None, message="pipeline cancelled")
             return {"phase": "cancelled", "retry_count": 0, "tester_report": ""}
         design = result
-        emit("phase_finished", "architect")
+        emit("phase_finished", "architect", message="architect finished")
     else:
         existing = _read_sandbox(target_dir)
         design = existing.get("design.md", "")
@@ -343,17 +344,22 @@ def run_pipeline(
 
     while True:
         if start_phase in ("architect", "implementer") or retry_count > 0:
-            emit("phase_started", "implementer")
+            emit("phase_started", "implementer", message="implementer started")
             code_files = implementer_phase(task, design, feedback=tester_report, sandbox_dir=target_dir)
-            emit("phase_finished", "implementer")
+            emit("phase_finished", "implementer", message="implementer finished")
 
-        emit("phase_started", "tester")
+        emit("phase_started", "tester", message="tester started")
         passed, tester_report = tester_phase(task, design, code_files, sandbox_dir=target_dir)
-        emit("phase_finished", "tester", None if passed else tester_report[:200] or None)
+        emit(
+            "phase_finished",
+            "tester",
+            None if passed else tester_report[:200] or None,
+            "tester finished" if passed else "tester failed",
+        )
 
         if passed:
             print("\n[HARNESS] All phases complete.")
-            emit("pipeline_done", None)
+            emit("pipeline_done", None, message="pipeline completed successfully")
             return {
                 "phase": "done",
                 "retry_count": retry_count,
@@ -363,7 +369,7 @@ def run_pipeline(
         retry_count += 1
         if retry_count >= max_retries:
             print(f"\n[HARNESS] Max retries ({max_retries}) reached. Finishing with failures.")
-            emit("pipeline_failed", None, tester_report[:200] or None)
+            emit("pipeline_failed", None, tester_report[:200] or None, "pipeline failed after max retries")
             return {
                 "phase": "done",
                 "failed": True,
@@ -372,5 +378,5 @@ def run_pipeline(
             }
 
         print(f"\n[HARNESS] Tests failed. Retrying implementation ({retry_count}/{max_retries})")
-        emit("retrying", "implementer", tester_report[:200] or None)
+        emit("retrying", "implementer", tester_report[:200] or None, "retrying after tester failure")
         start_phase = "implementer"

@@ -50,6 +50,8 @@ Why it is bad:
 python main.py --add "[Goal] ... [Language] ... [Input] ... [Output] ..."
 python main.py --queue
 python main.py --status
+python main.py --cancel <task-id>
+python main.py --skip <task-id>
 python main.py --drain
 python main.py --list
 ```

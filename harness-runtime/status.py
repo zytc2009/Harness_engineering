@@ -30,6 +30,11 @@ def update_status(
     queue_running: int = 0,
     queue_done: int = 0,
     queue_failed: int = 0,
+    queue_cancelled: int = 0,
+    queue_skipped: int = 0,
+    last_event_type: str | None = None,
+    last_event_message: str | None = None,
+    last_task_finished_at: str | None = None,
     error: str | None = None,
     status_path: str | Path = _DEFAULT_STATUS_FILE,
 ) -> None:
@@ -45,6 +50,11 @@ def update_status(
         "queue_running": queue_running,
         "queue_done": queue_done,
         "queue_failed": queue_failed,
+        "queue_cancelled": queue_cancelled,
+        "queue_skipped": queue_skipped,
+        "last_event_type": last_event_type,
+        "last_event_message": last_event_message,
+        "last_task_finished_at": last_task_finished_at,
         "error": error,
         "updated": datetime.now().strftime(_TS_FORMAT),
     }

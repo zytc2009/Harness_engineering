@@ -23,11 +23,13 @@ from orchestrator import SANDBOX, _read_sandbox, architect_phase, run_pipeline
 from status import read_status, update_status
 from task_queue import (
     add_task as queue_add_task,
+    cancel_task,
     list_queue,
     load_queue,
     mark_stale_running_as_failed,
     next_pending,
     queue_counts,
+    skip_task,
     update_task as queue_update_task,
 )
 
@@ -113,12 +115,13 @@ def _print_design_preview(sandbox_dir: Path) -> None:
     print("\n" + "=" * 55)
 
 
-def _queue_snapshot() -> tuple[int, int, int, int]:
+def _queue_snapshot() -> tuple[int, int, int, int, int, int]:
     return queue_counts(_QUEUE_FILE)
 
 
 def _write_idle_status() -> None:
-    pending, running, done, failed = _queue_snapshot()
+    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    current = read_status(_STATUS_FILE) or {}
     update_status(
         worker_state="idle",
         current_task_id=None,
@@ -129,6 +132,11 @@ def _write_idle_status() -> None:
         queue_running=running,
         queue_done=done,
         queue_failed=failed,
+        queue_cancelled=cancelled,
+        queue_skipped=skipped,
+        last_event_type="worker_idle",
+        last_event_message="queue empty",
+        last_task_finished_at=current.get("last_task_finished_at"),
         status_path=_STATUS_FILE,
     )
 
@@ -175,6 +183,50 @@ def handle_add(description: str, max_retries: int = 3) -> str:
     return task_id
 
 
+def handle_cancel(task_id: str) -> None:
+    cancel_task(task_id, _QUEUE_FILE)
+    print(f"[HARNESS] Task cancelled: {task_id}")
+    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    update_status(
+        worker_state="idle",
+        current_task_id=None,
+        current_task_description=None,
+        phase=None,
+        task_state=None,
+        queue_pending=pending,
+        queue_running=running,
+        queue_done=done,
+        queue_failed=failed,
+        queue_cancelled=cancelled,
+        queue_skipped=skipped,
+        last_event_type="task_cancelled",
+        last_event_message=f"task cancelled: {task_id}",
+        status_path=_STATUS_FILE,
+    )
+
+
+def handle_skip(task_id: str) -> None:
+    skip_task(task_id, _QUEUE_FILE)
+    print(f"[HARNESS] Task skipped: {task_id}")
+    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    update_status(
+        worker_state="idle",
+        current_task_id=None,
+        current_task_description=None,
+        phase=None,
+        task_state=None,
+        queue_pending=pending,
+        queue_running=running,
+        queue_done=done,
+        queue_failed=failed,
+        queue_cancelled=cancelled,
+        queue_skipped=skipped,
+        last_event_type="task_skipped",
+        last_event_message=f"task skipped: {task_id}",
+        status_path=_STATUS_FILE,
+    )
+
+
 def show_status() -> None:
     data = read_status(_STATUS_FILE)
     if data is None:
@@ -194,7 +246,9 @@ def show_status() -> None:
         f"  Queue       : {data.get('queue_pending', 0)} pending, "
         f"{data.get('queue_running', 0)} running, "
         f"{data.get('queue_done', 0)} done, "
-        f"{data.get('queue_failed', 0)} failed"
+        f"{data.get('queue_failed', 0)} failed, "
+        f"{data.get('queue_cancelled', 0)} cancelled, "
+        f"{data.get('queue_skipped', 0)} skipped"
     )
     if data.get("error"):
         print(f"  Error       : {data['error']}")
@@ -227,11 +281,12 @@ def _save_memory_if_present(user_input: str, tester_report: str) -> None:
 
 def _status_callback_for_task(thread_id: str, description: str, max_retries: int):
     def callback(event: dict) -> None:
-        pending, running, done, failed = _queue_snapshot()
+        pending, running, done, failed, cancelled, skipped = _queue_snapshot()
         event_type = event.get("type")
         phase = event.get("phase")
         retry_count = event.get("retry_count", 0)
         error = event.get("error")
+        message = event.get("message")
 
         worker_state = "running"
         task_state = "running"
@@ -255,6 +310,10 @@ def _status_callback_for_task(thread_id: str, description: str, max_retries: int
             queue_running=running,
             queue_done=done,
             queue_failed=failed,
+            queue_cancelled=cancelled,
+            queue_skipped=skipped,
+            last_event_type=event_type,
+            last_event_message=message,
             error=error,
             status_path=_STATUS_FILE,
         )
@@ -291,7 +350,13 @@ def run_drain(max_retries: int = 3) -> None:
         )
         _upsert_task(thread_id, user_input, "running", phase="architect", retry_count=0)
         callback = _status_callback_for_task(thread_id, user_input, max_retries)
-        callback({"type": "phase_started", "phase": "architect", "retry_count": 0, "error": None})
+        callback({
+            "type": "phase_started",
+            "phase": "architect",
+            "retry_count": 0,
+            "error": None,
+            "message": "architect started",
+        })
 
         started = time.monotonic()
         try:
@@ -321,7 +386,7 @@ def run_drain(max_retries: int = 3) -> None:
                 duration_s=duration,
                 error="interrupted",
             )
-            pending, running, done, failed = _queue_snapshot()
+            pending, running, done, failed, cancelled, skipped = _queue_snapshot()
             update_status(
                 worker_state="stopped",
                 current_task_id=thread_id,
@@ -334,6 +399,10 @@ def run_drain(max_retries: int = 3) -> None:
                 queue_running=running,
                 queue_done=done,
                 queue_failed=failed,
+                queue_cancelled=cancelled,
+                queue_skipped=skipped,
+                last_event_type="pipeline_interrupted",
+                last_event_message="worker interrupted during task execution",
                 error="interrupted",
                 status_path=_STATUS_FILE,
             )
@@ -366,6 +435,7 @@ def run_drain(max_retries: int = 3) -> None:
         failed = bool(result.get("failed"))
         final_status = "failed" if failed else "done"
         final_error = "tests_failed" if failed else None
+        finished_at = _now()
 
         queue_update_task(
             thread_id,
@@ -374,7 +444,7 @@ def run_drain(max_retries: int = 3) -> None:
             phase=result["phase"],
             retry_count=result["retry_count"],
             duration_s=duration,
-            finished_at=_now(),
+            finished_at=finished_at,
             error=final_error,
         )
         _upsert_task(
@@ -385,6 +455,27 @@ def run_drain(max_retries: int = 3) -> None:
             retry_count=result["retry_count"],
             duration_s=duration,
             **({"error": final_error} if final_error else {}),
+        )
+        pending, running, done, failed_count, cancelled, skipped = _queue_snapshot()
+        update_status(
+            worker_state="running",
+            current_task_id=thread_id,
+            current_task_description=user_input,
+            phase=result["phase"],
+            task_state=final_status,
+            retry_count=result["retry_count"],
+            max_retries=max_retries,
+            queue_pending=pending,
+            queue_running=running,
+            queue_done=done,
+            queue_failed=failed_count,
+            queue_cancelled=cancelled,
+            queue_skipped=skipped,
+            last_event_type="pipeline_failed" if failed else "pipeline_done",
+            last_event_message="task failed after retries" if failed else "task completed",
+            last_task_finished_at=finished_at,
+            error=final_error,
+            status_path=_STATUS_FILE,
         )
 
         _save_memory_if_present(user_input, result.get("tester_report", ""))
@@ -511,6 +602,8 @@ def main() -> None:
     parser.add_argument("--resume", metavar="ID", help="Restart a saved task")
     parser.add_argument("--list", action="store_true", help="List all saved tasks")
     parser.add_argument("--add", metavar="DESC", help="Add a task to the queue")
+    parser.add_argument("--cancel", metavar="ID", help="Cancel a pending queued task")
+    parser.add_argument("--skip", metavar="ID", help="Skip a pending queued task")
     parser.add_argument("--queue", action="store_true", help="List queued tasks")
     parser.add_argument("--status", action="store_true", help="Show current worker status")
     parser.add_argument("--drain", action="store_true", help="Process all pending queue tasks and exit")
@@ -528,6 +621,12 @@ def main() -> None:
     if args.add:
         max_retries = int(config.get_setting("MAX_RETRIES", "3"))
         handle_add(args.add, max_retries=max_retries)
+        return
+    if args.cancel:
+        handle_cancel(args.cancel)
+        return
+    if args.skip:
+        handle_skip(args.skip)
         return
     if args.queue:
         _print_queue()

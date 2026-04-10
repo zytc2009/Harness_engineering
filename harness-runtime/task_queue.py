@@ -98,13 +98,39 @@ def list_queue(queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> list[dict]:
     return load_queue(queue_path)
 
 
-def queue_counts(queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> tuple[int, int, int, int]:
+def _set_terminal_pending_only(task_id: str, target_status: str, queue_path: str | Path) -> None:
+    tasks = load_queue(queue_path)
+    now = _now()
+    for task in tasks:
+        if task.get("id") != task_id:
+            continue
+        if task.get("status") != "pending":
+            raise ValueError(f"Only pending tasks may become {target_status}: {task_id}")
+        task["status"] = target_status
+        task["finished_at"] = now
+        task["updated"] = now
+        save_queue(tasks, queue_path)
+        return
+    raise KeyError(f"Task not found: {task_id}")
+
+
+def cancel_task(task_id: str, queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> None:
+    _set_terminal_pending_only(task_id, "cancelled", queue_path)
+
+
+def skip_task(task_id: str, queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> None:
+    _set_terminal_pending_only(task_id, "skipped", queue_path)
+
+
+def queue_counts(queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> tuple[int, int, int, int, int, int]:
     tasks = load_queue(queue_path)
     pending = sum(1 for task in tasks if task.get("status") == "pending")
     running = sum(1 for task in tasks if task.get("status") == "running")
     done = sum(1 for task in tasks if task.get("status") == "done")
     failed = sum(1 for task in tasks if task.get("status") == "failed")
-    return pending, running, done, failed
+    cancelled = sum(1 for task in tasks if task.get("status") == "cancelled")
+    skipped = sum(1 for task in tasks if task.get("status") == "skipped")
+    return pending, running, done, failed, cancelled, skipped
 
 
 def mark_stale_running_as_failed(queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> int:
