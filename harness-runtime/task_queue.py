@@ -47,6 +47,8 @@ def add_task(
     description: str,
     queue_path: str | Path = _DEFAULT_QUEUE_FILE,
     max_retries: int = 3,
+    source_doc: str | None = None,
+    source_type: str | None = None,
 ) -> str:
     tasks = load_queue(queue_path)
     now = _now()
@@ -64,6 +66,8 @@ def add_task(
         "started_at": None,
         "finished_at": None,
         "duration_s": None,
+        "source_doc": source_doc,
+        "source_type": source_type,
     })
     save_queue(tasks, queue_path)
     return task_id

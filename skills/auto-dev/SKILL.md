@@ -180,3 +180,25 @@ S_HALT ←── S4:SCHEDULE ←→ S5:WAIT ←→ S6:ON_COMPLETE
 | `protocols/scheduler.md` | S4-S6 事件循环 | 调度规则、并发安全、context budget |
 | `protocols/task-agent.md` | 启动 sub-agent | prompt 模板、闭环控制、模型路由 |
 | `protocols/recovery.md` | 断点恢复、故障处理 | 恢复策略、故障表、S_HALT 格式 |
+
+## Runtime Queue Hand-off
+
+Use `--enqueue` after requirement discussion is complete and the task document is ready for execution.
+
+Expected document contract:
+
+- markdown task document
+- includes `Goal`
+- includes `Inputs`
+- includes `Outputs`
+- includes `Acceptance Criteria`
+- includes `Status`
+- `Status` must be `ready`
+
+Recommended hand-off command:
+
+```bash
+python harness-runtime/main.py --add-file docs/tasks/task-001.md
+```
+
+The runtime queue keeps the original document path as source metadata for later status lookup and audit.

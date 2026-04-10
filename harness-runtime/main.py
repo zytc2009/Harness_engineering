@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import uuid
@@ -36,6 +37,7 @@ from task_queue import (
 _TASKS_FILE = Path(__file__).parent / "harness_tasks.json"
 _QUEUE_FILE = Path(__file__).parent / "task_queue.json"
 _STATUS_FILE = Path(__file__).parent / "status.json"
+_DOC_REQUIRED_SECTIONS = ("goal", "inputs", "outputs", "acceptance criteria", "status")
 
 
 def _now() -> str:
@@ -85,6 +87,65 @@ def _upsert_task(thread_id: str, description: str, status: str, **extra) -> None
     _save_tasks(tasks)
 
 
+def _parse_task_doc_sections(text: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    status_inline: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        heading = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
+        if heading:
+            current = heading.group(1).strip().lower()
+            sections.setdefault(current, [])
+            continue
+        inline_status = re.match(r"^\s*status\s*:\s*(.+?)\s*$", line, re.IGNORECASE)
+        if inline_status:
+            status_inline = inline_status.group(1).strip()
+        if current is not None:
+            sections[current].append(line)
+
+    normalized = {
+        key: "\n".join(value).strip()
+        for key, value in sections.items()
+        if "\n".join(value).strip()
+    }
+    if status_inline and "status" not in normalized:
+        normalized["status"] = status_inline
+    return normalized
+
+
+def _render_doc_task_description(sections: dict[str, str]) -> str:
+    lines = [
+        f"[Goal] {sections['goal']}",
+        f"[Input] {sections['inputs']}",
+        f"[Output] {sections['outputs']}",
+        f"[Acceptance Criteria] {sections['acceptance criteria']}",
+    ]
+    if sections.get("scope"):
+        lines.append(f"[Scope] {sections['scope']}")
+    if sections.get("constraints"):
+        lines.append(f"[Constraints] {sections['constraints']}")
+    if sections.get("open questions"):
+        lines.append(f"[Open Questions] {sections['open questions']}")
+    return "\n".join(lines)
+
+
+def _load_task_doc(doc_path: str | Path) -> tuple[Path, str]:
+    path = Path(doc_path).resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Task document not found: {path}")
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"Task document is empty: {path}")
+    sections = _parse_task_doc_sections(text)
+    missing = [name for name in _DOC_REQUIRED_SECTIONS if not sections.get(name)]
+    if missing:
+        raise ValueError(f"Task document missing required sections: {', '.join(missing)}")
+    if sections["status"].strip().lower() != "ready":
+        raise ValueError(f"Task document is not ready for enqueue: {path}")
+    return path, _render_doc_task_description(sections)
+
+
 def _repair_history_for_stale_running_tasks(stale_task_ids: set[str]) -> None:
     if not stale_task_ids:
         return
@@ -101,6 +162,8 @@ def _repair_history_for_stale_running_tasks(stale_task_ids: set[str]) -> None:
             retry_count=task.get("retry_count", 0),
             duration_s=task.get("duration_s"),
             error="worker_interrupted",
+            source_doc=task.get("source_doc"),
+            source_type=task.get("source_type"),
         )
 
 
@@ -234,6 +297,42 @@ def handle_add(description: str, max_retries: int = 3) -> str:
     return task_id
 
 
+def handle_add_file(doc_path: str, max_retries: int = 3) -> str:
+    resolved_doc_path, description = _load_task_doc(doc_path)
+    task_id = queue_add_task(
+        description,
+        _QUEUE_FILE,
+        max_retries=max_retries,
+        source_doc=str(resolved_doc_path),
+        source_type="task_doc",
+    )
+    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
+    update_status(
+        worker_state="idle",
+        current_task_id=None,
+        current_task_description=None,
+        last_task_id=last_task_id,
+        last_task_description=last_task_description,
+        phase=None,
+        task_state=None,
+        queue_pending=pending,
+        queue_running=running,
+        queue_done=done,
+        queue_failed=failed,
+        queue_cancelled=cancelled,
+        queue_skipped=skipped,
+        last_event_type="task_queued",
+        last_event_message=f"task queued from doc: {task_id}",
+        last_task_finished_at=last_task_finished_at,
+        status_path=_STATUS_FILE,
+    )
+    print(f"[HARNESS] Task added from doc: {task_id}")
+    print(f"  Source: {resolved_doc_path}")
+    print("  Run 'python main.py --drain' to process queued tasks.")
+    return task_id
+
+
 def handle_cancel(task_id: str) -> None:
     cancel_task(task_id, _QUEUE_FILE)
     print(f"[HARNESS] Task cancelled: {task_id}")
@@ -331,7 +430,8 @@ def _print_queue() -> None:
     print(f"\n{'ID':<36}  {'Status':<10}  {'Created':<19}  Description")
     print("-" * 110)
     for task in queue:
-        print(f"{task['id']}  {task['status']:<10}  {task['created']:<19}  {task['description'][:60]}")
+        source = f"  [{Path(task['source_doc']).name}]" if task.get("source_doc") else ""
+        print(f"{task['id']}  {task['status']:<10}  {task['created']:<19}  {task['description'][:60]}{source}")
     print()
 
 
@@ -422,7 +522,15 @@ def run_drain(max_retries: int = 3) -> None:
             error=None,
             max_retries=task_max_retries,
         )
-        _upsert_task(thread_id, user_input, "running", phase="architect", retry_count=0)
+        _upsert_task(
+            thread_id,
+            user_input,
+            "running",
+            phase="architect",
+            retry_count=0,
+            source_doc=task.get("source_doc"),
+            source_type=task.get("source_type"),
+        )
         callback = _status_callback_for_task(thread_id, user_input, task_max_retries)
         callback({
             "type": "phase_started",
@@ -459,6 +567,8 @@ def run_drain(max_retries: int = 3) -> None:
                 phase="interrupted",
                 duration_s=duration,
                 error="interrupted",
+                source_doc=task.get("source_doc"),
+                source_type=task.get("source_type"),
             )
             pending, running, done, failed, cancelled, skipped = _queue_snapshot()
             update_status(
@@ -504,6 +614,8 @@ def run_drain(max_retries: int = 3) -> None:
                 phase="error",
                 duration_s=duration,
                 error=str(exc)[:200],
+                source_doc=task.get("source_doc"),
+                source_type=task.get("source_type"),
             )
             pending, running, done, failed_count, cancelled, skipped = _queue_snapshot()
             update_status(
@@ -555,6 +667,8 @@ def run_drain(max_retries: int = 3) -> None:
             phase=result["phase"],
             retry_count=result["retry_count"],
             duration_s=duration,
+            source_doc=task.get("source_doc"),
+            source_type=task.get("source_type"),
             **({"error": final_error} if final_error else {}),
         )
         pending, running, done, failed_count, cancelled, skipped = _queue_snapshot()
@@ -821,6 +935,7 @@ def main() -> None:
     parser.add_argument("--resume", metavar="ID", help="Restart a saved task")
     parser.add_argument("--list", action="store_true", help="List all saved tasks")
     parser.add_argument("--add", metavar="DESC", help="Add a task to the queue")
+    parser.add_argument("--add-file", metavar="PATH", help="Add a ready task document to the queue")
     parser.add_argument("--cancel", metavar="ID", help="Cancel a pending queued task")
     parser.add_argument("--skip", metavar="ID", help="Skip a pending queued task")
     parser.add_argument("--queue", action="store_true", help="List queued tasks")
@@ -840,6 +955,10 @@ def main() -> None:
     if args.add:
         max_retries = int(config.get_setting("MAX_RETRIES", "3"))
         handle_add(args.add, max_retries=max_retries)
+        return
+    if args.add_file:
+        max_retries = int(config.get_setting("MAX_RETRIES", "3"))
+        handle_add_file(args.add_file, max_retries=max_retries)
         return
     if args.cancel:
         handle_cancel(args.cancel)

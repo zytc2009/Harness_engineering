@@ -317,6 +317,7 @@ Commands:
 cd harness-runtime
 
 python main.py --add "[Goal] Build a calculator [Language] Python [Input] stdin expressions [Output] stdout results"
+python main.py --add-file docs/tasks/task-001.md
 python main.py --queue
 python main.py --status
 python main.py --cancel <task-id>
@@ -327,6 +328,7 @@ python main.py --drain
 Behavior:
 
 - `--add` appends a task to `task_queue.json`
+- `--add-file` validates a ready task document, converts it into a runtime task description, and appends it to `task_queue.json`
 - `--queue` shows queued items
 - `--status` shows the current worker snapshot from `status.json`
 - `--cancel` marks a pending task as cancelled
@@ -346,6 +348,12 @@ Field semantics:
 - `current_task_*`: the task currently being executed by the worker; these fields are `null` when the worker is idle
 - `last_task_*`: the most recently completed task summary; these fields remain available while the worker is idle or after queue control actions such as `--cancel` and `--skip`
 - `last_event_*`: a single-event snapshot of the most recent lifecycle transition; phase 1 keeps only the latest event instead of a rolling event history
+
+Task document enqueue:
+
+- `--add-file` expects a markdown task document with `Goal`, `Inputs`, `Outputs`, `Acceptance Criteria`, and `Status`
+- only documents with `Status: ready` or a `## Status` section set to `ready` are accepted
+- runtime stores the original task document path as `source_doc` so queue/history can point back to the requirement source
 
 Additional files:
 

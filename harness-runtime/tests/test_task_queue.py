@@ -64,6 +64,21 @@ class TestAddTask:
         assert queue[0]["description"] == "build calculator"
         assert queue[0]["status"] == "pending"
         assert queue[0]["max_retries"] == 3
+        assert queue[0]["source_doc"] is None
+        assert queue[0]["source_type"] is None
+
+    def test_adds_task_with_source_doc_metadata(self, tmp_path):
+        path = tmp_path / "q.json"
+        task_id = add_task(
+            "build calculator",
+            path,
+            source_doc="docs/tasks/calc.md",
+            source_type="task_doc",
+        )
+        queue = load_queue(path)
+        assert queue[0]["id"] == task_id
+        assert queue[0]["source_doc"] == "docs/tasks/calc.md"
+        assert queue[0]["source_type"] == "task_doc"
 
     def test_appends_to_existing_queue_in_fifo_order(self, tmp_path):
         path = tmp_path / "q.json"

@@ -29,6 +29,74 @@ class TestHandleAdd:
         assert status["queue_pending"] == 1
         assert status["last_event_type"] == "task_queued"
 
+    def test_handle_add_file_writes_task_with_source_doc(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        doc_path = tmp_path / "task.md"
+        doc_path.write_text(
+            "\n".join([
+                "# Task",
+                "## Goal",
+                "Build a calculator",
+                "## Inputs",
+                "stdin expressions",
+                "## Outputs",
+                "stdout results",
+                "## Acceptance Criteria",
+                "All provided samples pass",
+                "## Status",
+                "ready",
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
+            from main import handle_add_file
+
+            task_id = handle_add_file(str(doc_path), max_retries=2)
+
+        queue = load_queue(queue_path)
+        assert queue[0]["id"] == task_id
+        assert queue[0]["status"] == "pending"
+        assert queue[0]["source_doc"] == str(doc_path.resolve())
+        assert queue[0]["source_type"] == "task_doc"
+        assert "[Goal] Build a calculator" in queue[0]["description"]
+        status = read_status(status_path)
+        assert status["queue_pending"] == 1
+        assert status["last_event_type"] == "task_queued"
+
+    def test_handle_add_file_rejects_non_ready_doc(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        doc_path = tmp_path / "task.md"
+        doc_path.write_text(
+            "\n".join([
+                "## Goal",
+                "Build a calculator",
+                "## Inputs",
+                "stdin expressions",
+                "## Outputs",
+                "stdout results",
+                "## Acceptance Criteria",
+                "All provided samples pass",
+                "## Status",
+                "draft",
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
+            from main import handle_add_file
+
+            try:
+                handle_add_file(str(doc_path), max_retries=2)
+                raise AssertionError("expected ValueError")
+            except ValueError as exc:
+                assert "not ready" in str(exc)
+
+        assert load_queue(queue_path) == []
+        assert read_status(status_path) is None
+
 
 class TestQueueControls:
     def test_handle_cancel_marks_task_cancelled(self, tmp_path):
@@ -156,6 +224,53 @@ class TestRunDrain:
         assert status["last_event_type"] == "worker_idle"
         assert status["last_task_id"] == queue[1]["id"]
         assert status["last_task_description"] == "task B"
+
+    def test_run_drain_preserves_source_doc_in_history(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        tasks_path = tmp_path / "tasks.json"
+        sandbox_root = tmp_path / "sandbox"
+
+        doc_path = tmp_path / "task.md"
+        doc_path.write_text(
+            "\n".join([
+                "## Goal",
+                "Build from doc",
+                "## Inputs",
+                "stdin",
+                "## Outputs",
+                "stdout",
+                "## Acceptance Criteria",
+                "works",
+                "## Status",
+                "ready",
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
+            from main import handle_add_file
+
+            task_id = handle_add_file(str(doc_path), max_retries=2)
+
+        with (
+            patch("main._QUEUE_FILE", queue_path),
+            patch("main._STATUS_FILE", status_path),
+            patch("main._TASKS_FILE", tasks_path),
+            patch("main.SANDBOX", sandbox_root),
+            patch("main.config.validate"),
+            patch("main.print_banner"),
+            patch("main.extract_and_save_memory"),
+            patch("main.run_pipeline", return_value={"phase": "done", "retry_count": 0, "tester_report": ""}),
+        ):
+            from main import run_drain
+
+            run_drain(max_retries=2)
+
+        tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+        task = next(item for item in tasks if item["id"] == task_id)
+        assert task["source_doc"] == str(doc_path.resolve())
+        assert task["source_type"] == "task_doc"
 
     def test_run_drain_continues_after_failure(self, tmp_path):
         queue_path = tmp_path / "q.json"

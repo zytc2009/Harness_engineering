@@ -48,6 +48,7 @@ Why it is bad:
 
 ```bash
 python main.py --add "[Goal] ... [Language] ... [Input] ... [Output] ..."
+python main.py --add-file docs/tasks/task-001.md
 python main.py --queue
 python main.py --status
 python main.py --cancel <task-id>
@@ -67,3 +68,28 @@ Phase 1 implements a reliable drain worker. `--drain` processes all current pend
 - `current_task_*`: the task running right now
 - `last_task_*`: the most recently completed task, preserved while the worker is idle
 - `last_event_*`: the latest lifecycle event only; phase 1 does not keep an event trail
+
+## Task Document Enqueue
+
+`python main.py --add-file <path>` accepts a markdown task document instead of a single inline string.
+
+Minimum required sections:
+
+```markdown
+## Goal
+<what to build>
+
+## Inputs
+<what the program or feature receives>
+
+## Outputs
+<what it produces>
+
+## Acceptance Criteria
+<how to know it is done>
+
+## Status
+ready
+```
+
+Optional sections such as `Scope`, `Constraints`, and `Open Questions` are also imported into the runtime task description.
