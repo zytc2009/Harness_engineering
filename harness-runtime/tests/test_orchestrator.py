@@ -1,5 +1,6 @@
 """Tests for the one-shot pipeline orchestrator."""
 
+import logging
 import sys
 import textwrap
 from pathlib import Path
@@ -359,3 +360,43 @@ class TestRunPipeline:
 
         assert result["phase"] == "done"
         mock_impl.assert_not_called()
+
+    def test_pipeline_retries_implementer_after_tester_resume_failure(self, tmp_path):
+        sandbox_dir = tmp_path / "task-abc"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "design.md").write_text("design", encoding="utf-8")
+        (sandbox_dir / "main.py").write_text("x=1", encoding="utf-8")
+
+        with (
+            patch("orchestrator.implementer_phase", return_value={"main.py": "fixed"}) as mock_impl,
+            patch("orchestrator.tester_phase", side_effect=[(False, "fail"), (True, "ok")]),
+        ):
+            result = run_pipeline(
+                "build something",
+                start_phase="tester",
+                max_retries=3,
+                sandbox_dir=sandbox_dir,
+            )
+
+        assert result["phase"] == "done"
+        assert result["retry_count"] == 1
+        mock_impl.assert_called_once()
+
+
+class TestReadSandbox:
+    def test_logs_when_file_read_fails(self, tmp_path, caplog):
+        good = tmp_path / "good.txt"
+        bad = tmp_path / "bad.txt"
+        good.write_text("ok", encoding="utf-8")
+        bad.write_bytes(b"\xff")
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("orchestrator._resolve_sandbox_dir", return_value=tmp_path),
+        ):
+            from orchestrator import _read_sandbox
+
+            result = _read_sandbox(tmp_path)
+
+        assert result == {"good.txt": "ok"}
+        assert f"Failed to read sandbox file {bad}" in caplog.text

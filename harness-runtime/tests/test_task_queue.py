@@ -145,6 +145,19 @@ class TestUpdateTask:
         assert task["retry_count"] == 1
         assert task["updated"] >= before
 
+    def test_update_task_replaces_record_without_mutating_loaded_copy(self, tmp_path):
+        path = tmp_path / "q.json"
+        task_id = add_task("task", path)
+        original = load_queue(path)
+        original_task = original[0]
+
+        update_task(task_id, queue_path=path, status="running")
+
+        updated = load_queue(path)
+        assert original_task["status"] == "pending"
+        assert updated[0]["status"] == "running"
+        assert updated[0] is not original_task
+
     def test_raises_on_unknown_id(self, tmp_path):
         path = tmp_path / "q.json"
         with pytest.raises(KeyError):
@@ -203,6 +216,20 @@ class TestRecovery:
         assert queue[0]["status"] == "failed"
         assert queue[0]["error"] == "worker_interrupted"
         assert queue[0]["finished_at"] is not None
+
+    def test_mark_stale_running_replaces_records_without_mutating_loaded_copy(self, tmp_path):
+        path = tmp_path / "q.json"
+        running_id = add_task("running", path)
+        update_task(running_id, queue_path=path, status="running")
+        original = load_queue(path)
+        original_task = original[0]
+
+        mark_stale_running_as_failed(path)
+
+        updated = load_queue(path)
+        assert original_task["status"] == "running"
+        assert updated[0]["status"] == "failed"
+        assert updated[0] is not original_task
 
 
 class TestListQueue:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
 _DEFAULT_STATUS_FILE = Path(__file__).parent / "status.json"
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+logger = logging.getLogger(__name__)
 
 
 def _write_atomic(path: Path, data: str) -> None:
@@ -71,6 +73,10 @@ def read_status(status_path: str | Path = _DEFAULT_STATUS_FILE) -> dict | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError as exc:
+        logger.warning("Failed to parse status file %s: %s", path, exc)
+        return None
+    except OSError as exc:
+        logger.debug("Failed to read status file %s: %s", path, exc)
         return None
     return data if isinstance(data, dict) else None

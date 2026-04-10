@@ -1,5 +1,6 @@
 """Tests for status module."""
 
+import logging
 import sys
 from pathlib import Path
 
@@ -73,3 +74,31 @@ class TestReadStatus:
         path = tmp_path / "status.json"
         path.write_text("{bad", encoding="utf-8")
         assert read_status(path) is None
+
+    def test_logs_on_corrupt_file(self, tmp_path, caplog):
+        path = tmp_path / "status.json"
+        path.write_text("{bad", encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING):
+            assert read_status(path) is None
+
+        assert f"Failed to parse status file {path}" in caplog.text
+
+    def test_oserror_is_debug_only(self, tmp_path, caplog):
+        path = tmp_path / "status.json"
+        path.write_text("{}", encoding="utf-8")
+
+        original = Path.read_text
+
+        def boom(self, *args, **kwargs):
+            if self == path:
+                raise OSError("denied")
+            return original(self, *args, **kwargs)
+
+        with caplog.at_level(logging.WARNING):
+            from unittest.mock import patch
+
+            with patch.object(Path, "read_text", boom):
+                assert read_status(path) is None
+
+        assert f"Failed to read status file {path}" not in caplog.text

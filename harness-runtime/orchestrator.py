@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from prompts import get_system_prompt
 
 SANDBOX = Path(tempfile.gettempdir()) / "harness_sandbox"
 SANDBOX.mkdir(exist_ok=True)
+logger = logging.getLogger(__name__)
 
 
 def _resolve_sandbox_dir(sandbox_dir: str | Path | None = None) -> Path:
@@ -96,8 +98,8 @@ def _read_sandbox(sandbox_dir: str | Path | None = None) -> dict[str, str]:
         if path.is_file():
             try:
                 result[path.name] = path.read_text(encoding="utf-8")
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning("Failed to read sandbox file %s: %s", path, exc)
     return result
 
 
