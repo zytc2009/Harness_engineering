@@ -1,6 +1,7 @@
 """Tests for queue/drain behavior in main.py."""
 
 import sys
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -90,6 +91,39 @@ class TestQueueControls:
 
 
 class TestRunDrain:
+    def test_run_drain_uses_per_task_max_retries(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        tasks_path = tmp_path / "tasks.json"
+        sandbox_root = tmp_path / "sandbox"
+
+        add_task("task A", queue_path, max_retries=1)
+        add_task("task B", queue_path, max_retries=4)
+        seen = []
+
+        def mock_pipeline(**kwargs):
+            seen.append((kwargs["task"], kwargs["max_retries"]))
+            return {"phase": "done", "retry_count": 0, "tester_report": ""}
+
+        with (
+            patch("main._QUEUE_FILE", queue_path),
+            patch("main._STATUS_FILE", status_path),
+            patch("main._TASKS_FILE", tasks_path),
+            patch("main.SANDBOX", sandbox_root),
+            patch("main.config.validate"),
+            patch("main.print_banner"),
+            patch("main.extract_and_save_memory"),
+            patch("main.run_pipeline", side_effect=mock_pipeline),
+        ):
+            from main import run_drain
+
+            run_drain(max_retries=9)
+
+        assert seen == [("task A", 1), ("task B", 4)]
+        queue = load_queue(queue_path)
+        assert queue[0]["max_retries"] == 1
+        assert queue[1]["max_retries"] == 4
+
     def test_run_drain_processes_two_successful_tasks(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
@@ -214,6 +248,46 @@ class TestRunDrain:
         assert queue[0]["status"] == "failed"
         assert queue[0]["error"] == "worker_interrupted"
         assert queue[1]["status"] == "done"
+
+    def test_run_drain_repairs_stale_running_history_before_processing(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        tasks_path = tmp_path / "tasks.json"
+        sandbox_root = tmp_path / "sandbox"
+
+        stale_id = add_task("stale", queue_path)
+        add_task("fresh", queue_path)
+
+        from task_queue import update_task
+
+        update_task(stale_id, queue_path=queue_path, status="running")
+        tasks_path.write_text(json.dumps([{
+            "id": stale_id,
+            "description": "stale",
+            "status": "running",
+            "created": "2026-04-10 10:00:00",
+            "updated": "2026-04-10 10:00:00",
+        }], ensure_ascii=False, indent=2), encoding="utf-8")
+
+        with (
+            patch("main._QUEUE_FILE", queue_path),
+            patch("main._STATUS_FILE", status_path),
+            patch("main._TASKS_FILE", tasks_path),
+            patch("main.SANDBOX", sandbox_root),
+            patch("main.config.validate"),
+            patch("main.print_banner"),
+            patch("main.extract_and_save_memory"),
+            patch("main.run_pipeline", return_value={"phase": "done", "retry_count": 0, "tester_report": ""}),
+        ):
+            from main import run_drain
+
+            run_drain(max_retries=2)
+
+        tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+        stale = next(task for task in tasks if task["id"] == stale_id)
+        assert stale["status"] == "failed"
+        assert stale["phase"] == "interrupted"
+        assert stale["error"] == "worker_interrupted"
 
     def test_keyboard_interrupt_stops_drain_and_leaves_remaining_pending(self, tmp_path):
         queue_path = tmp_path / "q.json"
@@ -375,3 +449,32 @@ class TestInteractiveStatus:
         assert status["last_task_id"] == "task-1"
         assert status["last_task_description"] == "interactive task"
         assert status["last_event_type"] == "pipeline_done"
+
+    def test_architect_failure_updates_status_and_history(self, tmp_path):
+        status_path = tmp_path / "status.json"
+        tasks_path = tmp_path / "tasks.json"
+        sandbox_root = tmp_path / "sandbox"
+
+        with (
+            patch("main._STATUS_FILE", status_path),
+            patch("main._TASKS_FILE", tasks_path),
+            patch("main.SANDBOX", sandbox_root),
+            patch("main.print_banner"),
+            patch("main.architect_phase", side_effect=RuntimeError("architect boom")),
+        ):
+            from main import _run_single_task
+
+            try:
+                _run_single_task("task-2", "architect task", "architect", max_retries=2)
+            except RuntimeError as exc:
+                assert str(exc) == "architect boom"
+
+        status = read_status(status_path)
+        assert status["worker_state"] == "stopped"
+        assert status["last_event_type"] == "pipeline_failed"
+        assert status["error"] == "architect boom"
+
+        tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+        task = next(item for item in tasks if item["id"] == "task-2")
+        assert task["status"] == "failed"
+        assert task["error"] == "architect boom"

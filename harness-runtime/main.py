@@ -85,6 +85,25 @@ def _upsert_task(thread_id: str, description: str, status: str, **extra) -> None
     _save_tasks(tasks)
 
 
+def _repair_history_for_stale_running_tasks(stale_task_ids: set[str]) -> None:
+    if not stale_task_ids:
+        return
+    queue_by_id = {task["id"]: task for task in load_queue(_QUEUE_FILE) if task.get("id") in stale_task_ids}
+    for task_id in stale_task_ids:
+        task = queue_by_id.get(task_id)
+        if task is None:
+            continue
+        _upsert_task(
+            task_id,
+            task.get("description", ""),
+            "failed",
+            phase="interrupted",
+            retry_count=task.get("retry_count", 0),
+            duration_s=task.get("duration_s"),
+            error="worker_interrupted",
+        )
+
+
 def _incomplete_tasks() -> list[dict]:
     return [task for task in _load_tasks() if task["status"] in ("running", "failed")]
 
@@ -367,8 +386,10 @@ def _status_callback_for_task(thread_id: str, description: str, max_retries: int
 
 def run_drain(max_retries: int = 3) -> None:
     config.validate()
+    stale_task_ids = {task["id"] for task in load_queue(_QUEUE_FILE) if task.get("status") == "running"}
     repaired = mark_stale_running_as_failed(_QUEUE_FILE)
     if repaired:
+        _repair_history_for_stale_running_tasks(stale_task_ids)
         print(f"[HARNESS] Recovered {repaired} interrupted running task(s).")
 
     while True:
@@ -380,6 +401,7 @@ def run_drain(max_retries: int = 3) -> None:
 
         thread_id = task["id"]
         user_input = task["description"]
+        task_max_retries = int(task.get("max_retries") or max_retries)
         sandbox_dir = _task_sandbox_dir(thread_id)
         print_banner(thread_id, sandbox_dir)
 
@@ -390,10 +412,10 @@ def run_drain(max_retries: int = 3) -> None:
             phase="architect",
             started_at=task.get("started_at") or _now(),
             error=None,
-            max_retries=max_retries,
+            max_retries=task_max_retries,
         )
         _upsert_task(thread_id, user_input, "running", phase="architect", retry_count=0)
-        callback = _status_callback_for_task(thread_id, user_input, max_retries)
+        callback = _status_callback_for_task(thread_id, user_input, task_max_retries)
         callback({
             "type": "phase_started",
             "phase": "architect",
@@ -407,7 +429,7 @@ def run_drain(max_retries: int = 3) -> None:
             result = run_pipeline(
                 task=user_input,
                 start_phase="architect",
-                max_retries=max_retries,
+                max_retries=task_max_retries,
                 sandbox_dir=sandbox_dir,
                 on_status=callback,
             )
@@ -440,7 +462,7 @@ def run_drain(max_retries: int = 3) -> None:
                 phase="interrupted",
                 task_state="failed",
                 retry_count=0,
-                max_retries=max_retries,
+                max_retries=task_max_retries,
                 queue_pending=pending,
                 queue_running=running,
                 queue_done=done,
@@ -485,7 +507,7 @@ def run_drain(max_retries: int = 3) -> None:
                 phase="error",
                 task_state="failed",
                 retry_count=0,
-                max_retries=max_retries,
+                max_retries=task_max_retries,
                 queue_pending=pending,
                 queue_running=running,
                 queue_done=done,
@@ -537,7 +559,7 @@ def run_drain(max_retries: int = 3) -> None:
             phase=result["phase"],
             task_state=final_status,
             retry_count=result["retry_count"],
-            max_retries=max_retries,
+            max_retries=task_max_retries,
             queue_pending=pending,
             queue_running=running,
             queue_done=done,
@@ -614,41 +636,41 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
         status_path=_STATUS_FILE,
     )
 
-    if start_phase == "architect":
-        design = architect_phase(user_input, sandbox_dir=sandbox_dir)
-        _print_design_preview(sandbox_dir)
-        if not _confirm("  Proceed with implementation? (yes/no): "):
-            print("  [HARNESS] Implementation cancelled.")
-            _upsert_task(thread_id, user_input, "failed", phase="cancelled", error="cancelled")
-            pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-            update_status(
-                worker_state="stopped",
-                current_task_id=thread_id,
-                current_task_description=user_input,
-                last_task_id=last_task_id,
-                last_task_description=last_task_description,
-                phase="cancelled",
-                task_state="failed",
-                retry_count=0,
-                max_retries=max_retries,
-                queue_pending=pending,
-                queue_running=running,
-                queue_done=done,
-                queue_failed=failed,
-                queue_cancelled=cancelled,
-                queue_skipped=skipped,
-                last_event_type="pipeline_cancelled",
-                last_event_message="interactive task cancelled before implementation",
-                last_task_finished_at=last_task_finished_at,
-                error="cancelled",
-                status_path=_STATUS_FILE,
-            )
-            return
-        start_phase = "implementer"
-
     started = time.monotonic()
-    print("\n[HARNESS] Starting pipeline...\n")
     try:
+        if start_phase == "architect":
+            architect_phase(user_input, sandbox_dir=sandbox_dir)
+            _print_design_preview(sandbox_dir)
+            if not _confirm("  Proceed with implementation? (yes/no): "):
+                print("  [HARNESS] Implementation cancelled.")
+                _upsert_task(thread_id, user_input, "failed", phase="cancelled", error="cancelled")
+                pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+                update_status(
+                    worker_state="stopped",
+                    current_task_id=thread_id,
+                    current_task_description=user_input,
+                    last_task_id=last_task_id,
+                    last_task_description=last_task_description,
+                    phase="cancelled",
+                    task_state="failed",
+                    retry_count=0,
+                    max_retries=max_retries,
+                    queue_pending=pending,
+                    queue_running=running,
+                    queue_done=done,
+                    queue_failed=failed,
+                    queue_cancelled=cancelled,
+                    queue_skipped=skipped,
+                    last_event_type="pipeline_cancelled",
+                    last_event_message="interactive task cancelled before implementation",
+                    last_task_finished_at=last_task_finished_at,
+                    error="cancelled",
+                    status_path=_STATUS_FILE,
+                )
+                return
+            start_phase = "implementer"
+
+        print("\n[HARNESS] Starting pipeline...\n")
         result = run_pipeline(
             task=user_input,
             start_phase=start_phase,
