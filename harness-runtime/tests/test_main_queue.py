@@ -27,27 +27,61 @@ class TestHandleAdd:
 class TestQueueControls:
     def test_handle_cancel_marks_task_cancelled(self, tmp_path):
         queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
         task_id = add_task("cancel me", queue_path)
 
-        with patch("main._QUEUE_FILE", queue_path):
+        from status import update_status
+        update_status(
+            worker_state="idle",
+            current_task_id=None,
+            current_task_description=None,
+            last_task_id="done-1",
+            last_task_description="completed before",
+            phase=None,
+            task_state=None,
+            last_task_finished_at="2026-04-10 10:00:00",
+            status_path=status_path,
+        )
+
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
             from main import handle_cancel
 
             handle_cancel(task_id)
 
         queue = load_queue(queue_path)
         assert queue[0]["status"] == "cancelled"
+        status = read_status(status_path)
+        assert status["last_task_id"] == "done-1"
+        assert status["last_task_finished_at"] == "2026-04-10 10:00:00"
 
     def test_handle_skip_marks_task_skipped(self, tmp_path):
         queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
         task_id = add_task("skip me", queue_path)
 
-        with patch("main._QUEUE_FILE", queue_path):
+        from status import update_status
+        update_status(
+            worker_state="idle",
+            current_task_id=None,
+            current_task_description=None,
+            last_task_id="done-2",
+            last_task_description="completed before",
+            phase=None,
+            task_state=None,
+            last_task_finished_at="2026-04-10 10:00:00",
+            status_path=status_path,
+        )
+
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
             from main import handle_skip
 
             handle_skip(task_id)
 
         queue = load_queue(queue_path)
         assert queue[0]["status"] == "skipped"
+        status = read_status(status_path)
+        assert status["last_task_id"] == "done-2"
+        assert status["last_task_finished_at"] == "2026-04-10 10:00:00"
 
 
 class TestRunDrain:
@@ -81,6 +115,8 @@ class TestRunDrain:
         assert status["queue_cancelled"] == 0
         assert status["queue_skipped"] == 0
         assert status["last_event_type"] == "worker_idle"
+        assert status["last_task_id"] == queue[1]["id"]
+        assert status["last_task_description"] == "task B"
 
     def test_run_drain_continues_after_failure(self, tmp_path):
         queue_path = tmp_path / "q.json"
@@ -278,3 +314,30 @@ class TestRunDrain:
 
         status = read_status(status_path)
         assert status["last_task_finished_at"] is not None
+        assert status["last_task_id"] is not None
+        assert status["last_task_description"] == "finish me"
+
+
+class TestInteractiveStatus:
+    def test_single_task_updates_status_snapshot(self, tmp_path):
+        status_path = tmp_path / "status.json"
+        tasks_path = tmp_path / "tasks.json"
+        sandbox_root = tmp_path / "sandbox"
+
+        with (
+            patch("main._STATUS_FILE", status_path),
+            patch("main._TASKS_FILE", tasks_path),
+            patch("main.SANDBOX", sandbox_root),
+            patch("main.print_banner"),
+            patch("main.extract_and_save_memory"),
+            patch("main.run_pipeline", return_value={"phase": "done", "retry_count": 0, "tester_report": ""}),
+        ):
+            from main import _run_single_task
+
+            _run_single_task("task-1", "interactive task", "implementer", max_retries=2)
+
+        status = read_status(status_path)
+        assert status["worker_state"] == "idle"
+        assert status["last_task_id"] == "task-1"
+        assert status["last_task_description"] == "interactive task"
+        assert status["last_event_type"] == "pipeline_done"

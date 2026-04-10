@@ -126,6 +126,8 @@ def _write_idle_status() -> None:
         worker_state="idle",
         current_task_id=None,
         current_task_description=None,
+        last_task_id=current.get("last_task_id"),
+        last_task_description=current.get("last_task_description"),
         phase=None,
         task_state=None,
         queue_pending=pending,
@@ -187,10 +189,13 @@ def handle_cancel(task_id: str) -> None:
     cancel_task(task_id, _QUEUE_FILE)
     print(f"[HARNESS] Task cancelled: {task_id}")
     pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    current = read_status(_STATUS_FILE) or {}
     update_status(
         worker_state="idle",
         current_task_id=None,
         current_task_description=None,
+        last_task_id=current.get("last_task_id"),
+        last_task_description=current.get("last_task_description"),
         phase=None,
         task_state=None,
         queue_pending=pending,
@@ -201,6 +206,7 @@ def handle_cancel(task_id: str) -> None:
         queue_skipped=skipped,
         last_event_type="task_cancelled",
         last_event_message=f"task cancelled: {task_id}",
+        last_task_finished_at=current.get("last_task_finished_at"),
         status_path=_STATUS_FILE,
     )
 
@@ -209,10 +215,13 @@ def handle_skip(task_id: str) -> None:
     skip_task(task_id, _QUEUE_FILE)
     print(f"[HARNESS] Task skipped: {task_id}")
     pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    current = read_status(_STATUS_FILE) or {}
     update_status(
         worker_state="idle",
         current_task_id=None,
         current_task_description=None,
+        last_task_id=current.get("last_task_id"),
+        last_task_description=current.get("last_task_description"),
         phase=None,
         task_state=None,
         queue_pending=pending,
@@ -223,6 +232,7 @@ def handle_skip(task_id: str) -> None:
         queue_skipped=skipped,
         last_event_type="task_skipped",
         last_event_message=f"task skipped: {task_id}",
+        last_task_finished_at=current.get("last_task_finished_at"),
         status_path=_STATUS_FILE,
     )
 
@@ -302,6 +312,8 @@ def _status_callback_for_task(thread_id: str, description: str, max_retries: int
             worker_state=worker_state,
             current_task_id=thread_id,
             current_task_description=description,
+            last_task_id=None,
+            last_task_description=None,
             phase=phase,
             task_state=task_state,
             retry_count=retry_count,
@@ -391,6 +403,8 @@ def run_drain(max_retries: int = 3) -> None:
                 worker_state="stopped",
                 current_task_id=thread_id,
                 current_task_description=user_input,
+                last_task_id=None,
+                last_task_description=None,
                 phase="interrupted",
                 task_state="failed",
                 retry_count=0,
@@ -461,6 +475,8 @@ def run_drain(max_retries: int = 3) -> None:
             worker_state="running",
             current_task_id=thread_id,
             current_task_description=user_input,
+            last_task_id=thread_id,
+            last_task_description=user_input,
             phase=result["phase"],
             task_state=final_status,
             retry_count=result["retry_count"],
@@ -517,6 +533,27 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
     sandbox_dir = _task_sandbox_dir(thread_id)
     print_banner(thread_id, sandbox_dir)
     _upsert_task(thread_id, user_input, "running", phase=start_phase, retry_count=0)
+    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    update_status(
+        worker_state="running",
+        current_task_id=thread_id,
+        current_task_description=user_input,
+        last_task_id=None,
+        last_task_description=None,
+        phase=start_phase,
+        task_state="running",
+        retry_count=0,
+        max_retries=max_retries,
+        queue_pending=pending,
+        queue_running=running,
+        queue_done=done,
+        queue_failed=failed,
+        queue_cancelled=cancelled,
+        queue_skipped=skipped,
+        last_event_type="phase_started",
+        last_event_message=f"{start_phase} started",
+        status_path=_STATUS_FILE,
+    )
 
     if start_phase == "architect":
         design = architect_phase(user_input, sandbox_dir=sandbox_dir)
@@ -524,6 +561,28 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
         if not _confirm("  Proceed with implementation? (yes/no): "):
             print("  [HARNESS] Implementation cancelled.")
             _upsert_task(thread_id, user_input, "failed", phase="cancelled", error="cancelled")
+            pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+            update_status(
+                worker_state="stopped",
+                current_task_id=thread_id,
+                current_task_description=user_input,
+                last_task_id=None,
+                last_task_description=None,
+                phase="cancelled",
+                task_state="failed",
+                retry_count=0,
+                max_retries=max_retries,
+                queue_pending=pending,
+                queue_running=running,
+                queue_done=done,
+                queue_failed=failed,
+                queue_cancelled=cancelled,
+                queue_skipped=skipped,
+                last_event_type="pipeline_cancelled",
+                last_event_message="interactive task cancelled before implementation",
+                error="cancelled",
+                status_path=_STATUS_FILE,
+            )
             return
         start_phase = "implementer"
 
@@ -547,12 +606,56 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
             duration_s=duration,
             error="KeyboardInterrupt",
         )
+        pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+        update_status(
+            worker_state="stopped",
+            current_task_id=thread_id,
+            current_task_description=user_input,
+            last_task_id=None,
+            last_task_description=None,
+            phase="interrupted",
+            task_state="failed",
+            retry_count=0,
+            max_retries=max_retries,
+            queue_pending=pending,
+            queue_running=running,
+            queue_done=done,
+            queue_failed=failed,
+            queue_cancelled=cancelled,
+            queue_skipped=skipped,
+            last_event_type="pipeline_interrupted",
+            last_event_message="interactive task interrupted",
+            error="KeyboardInterrupt",
+            status_path=_STATUS_FILE,
+        )
         print(f"[HARNESS] Resume with: python main.py --resume {thread_id}\n")
         return
     except Exception as exc:
         duration = round(time.monotonic() - started, 1)
         print(f"\n[HARNESS] Error: {exc}")
         _upsert_task(thread_id, user_input, "failed", duration_s=duration, error=str(exc)[:200])
+        pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+        update_status(
+            worker_state="stopped",
+            current_task_id=thread_id,
+            current_task_description=user_input,
+            last_task_id=None,
+            last_task_description=None,
+            phase="error",
+            task_state="failed",
+            retry_count=0,
+            max_retries=max_retries,
+            queue_pending=pending,
+            queue_running=running,
+            queue_done=done,
+            queue_failed=failed,
+            queue_cancelled=cancelled,
+            queue_skipped=skipped,
+            last_event_type="pipeline_failed",
+            last_event_message="interactive task raised an exception",
+            error=str(exc)[:200],
+            status_path=_STATUS_FILE,
+        )
         raise
 
     duration = round(time.monotonic() - started, 1)
@@ -592,6 +695,30 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
         retry_count=result["retry_count"],
         duration_s=duration,
         **({"error": "tests_failed"} if result.get("failed") else {}),
+    )
+    finished_at = _now()
+    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
+    update_status(
+        worker_state="idle",
+        current_task_id=None,
+        current_task_description=None,
+        last_task_id=thread_id,
+        last_task_description=user_input,
+        phase=result["phase"],
+        task_state=status,
+        retry_count=result["retry_count"],
+        max_retries=max_retries,
+        queue_pending=pending,
+        queue_running=running,
+        queue_done=done,
+        queue_failed=failed,
+        queue_cancelled=cancelled,
+        queue_skipped=skipped,
+        last_event_type="pipeline_failed" if result.get("failed") else "pipeline_done",
+        last_event_message="interactive task failed" if result.get("failed") else "interactive task completed",
+        last_task_finished_at=finished_at,
+        error="tests_failed" if result.get("failed") else None,
+        status_path=_STATUS_FILE,
     )
     _save_memory_if_present(user_input, report)
     print(f"[HARNESS] Task ID: {thread_id}\n")

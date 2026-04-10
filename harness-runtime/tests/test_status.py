@@ -29,6 +29,8 @@ class TestUpdateStatus:
             worker_state="running",
             current_task_id="abc-123",
             current_task_description="build calc",
+            last_task_id="prev-1",
+            last_task_description="previous task",
             phase="architect",
             task_state="running",
             retry_count=1,
@@ -48,6 +50,8 @@ class TestUpdateStatus:
         data = read_status(path)
         assert data["worker_state"] == "running"
         assert data["current_task_id"] == "abc-123"
+        assert data["last_task_id"] == "prev-1"
+        assert data["last_task_description"] == "previous task"
         assert data["queue_pending"] == 2
         assert data["queue_running"] == 1
         assert data["queue_done"] == 4
