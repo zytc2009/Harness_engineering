@@ -341,6 +341,12 @@ Phase 1 is intentionally a drain worker, not a long-running daemon.
 - `last_event_message`
 - `last_task_finished_at`
 
+Field semantics:
+
+- `current_task_*`: the task currently being executed by the worker; these fields are `null` when the worker is idle
+- `last_task_*`: the most recently completed task summary; these fields remain available while the worker is idle or after queue control actions such as `--cancel` and `--skip`
+- `last_event_*`: a single-event snapshot of the most recent lifecycle transition; phase 1 keeps only the latest event instead of a rolling event history
+
 Additional files:
 
 - `harness-runtime/task_queue.py`

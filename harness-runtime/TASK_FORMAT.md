@@ -59,3 +59,11 @@ python main.py --list
 ## Phase 1 Note
 
 Phase 1 implements a reliable drain worker. `--drain` processes all current pending tasks and exits. It is not yet a long-running daemon.
+
+## Status Snapshot Semantics
+
+`python main.py --status` reads `status.json` and reports:
+
+- `current_task_*`: the task running right now
+- `last_task_*`: the most recently completed task, preserved while the worker is idle
+- `last_event_*`: the latest lifecycle event only; phase 1 does not keep an event trail

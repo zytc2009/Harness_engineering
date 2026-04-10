@@ -478,3 +478,78 @@ class TestInteractiveStatus:
         task = next(item for item in tasks if item["id"] == "task-2")
         assert task["status"] == "failed"
         assert task["error"] == "architect boom"
+
+
+class TestShowStatus:
+    def test_show_status_displays_last_completed_task_when_idle(self, tmp_path, capsys):
+        status_path = tmp_path / "status.json"
+
+        from status import update_status
+
+        update_status(
+            worker_state="idle",
+            current_task_id=None,
+            current_task_description=None,
+            last_task_id="done-123",
+            last_task_description="last completed task",
+            phase="done",
+            task_state="done",
+            queue_pending=0,
+            queue_running=0,
+            queue_done=1,
+            queue_failed=0,
+            queue_cancelled=0,
+            queue_skipped=0,
+            last_event_type="worker_idle",
+            last_event_message="queue empty",
+            last_task_finished_at="2026-04-10 12:00:00",
+            status_path=status_path,
+        )
+
+        with patch("main._STATUS_FILE", status_path):
+            from main import show_status
+
+            show_status()
+
+        output = capsys.readouterr().out
+        assert "Last Task   : done-123" in output
+        assert "Last Desc   : last completed task" in output
+        assert "Last Done   : 2026-04-10 12:00:00" in output
+        assert "Last Event  : worker_idle" in output
+
+    def test_show_status_prefers_current_task_when_running(self, tmp_path, capsys):
+        status_path = tmp_path / "status.json"
+
+        from status import update_status
+
+        update_status(
+            worker_state="running",
+            current_task_id="run-123",
+            current_task_description="running task",
+            last_task_id="done-123",
+            last_task_description="older task",
+            phase="tester",
+            task_state="running",
+            retry_count=1,
+            max_retries=3,
+            queue_pending=1,
+            queue_running=1,
+            queue_done=4,
+            queue_failed=0,
+            queue_cancelled=0,
+            queue_skipped=0,
+            last_event_type="phase_started",
+            last_event_message="tester started",
+            last_task_finished_at="2026-04-10 11:00:00",
+            status_path=status_path,
+        )
+
+        with patch("main._STATUS_FILE", status_path):
+            from main import show_status
+
+            show_status()
+
+        output = capsys.readouterr().out
+        assert "Task ID     : run-123" in output
+        assert "Description : running task" in output
+        assert "Last Task   :" not in output

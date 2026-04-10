@@ -301,6 +301,10 @@ def show_status() -> None:
         print(f"  Description : {data.get('current_task_description', '-')}")
         print(f"  Phase       : {data.get('phase', '-')}")
         print(f"  Retries     : {data.get('retry_count', 0)}/{data.get('max_retries', 3)}")
+    elif data.get("last_task_id"):
+        print(f"  Last Task   : {data['last_task_id']}")
+        print(f"  Last Desc   : {data.get('last_task_description', '-')}")
+        print(f"  Last Done   : {data.get('last_task_finished_at', '-')}")
     print(
         f"  Queue       : {data.get('queue_pending', 0)} pending, "
         f"{data.get('queue_running', 0)} running, "
@@ -309,6 +313,10 @@ def show_status() -> None:
         f"{data.get('queue_cancelled', 0)} cancelled, "
         f"{data.get('queue_skipped', 0)} skipped"
     )
+    if data.get("last_event_type"):
+        print(f"  Last Event  : {data['last_event_type']}")
+    if data.get("last_event_message"):
+        print(f"  Event Msg   : {data['last_event_message']}")
     if data.get("error"):
         print(f"  Error       : {data['error']}")
     print(f"  Updated     : {data.get('updated', '-')}")
