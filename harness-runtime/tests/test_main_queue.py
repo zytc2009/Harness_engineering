@@ -13,7 +13,8 @@ from task_queue import add_task, load_queue
 class TestHandleAdd:
     def test_handle_add_writes_pending_task(self, tmp_path):
         queue_path = tmp_path / "q.json"
-        with patch("main._QUEUE_FILE", queue_path):
+        status_path = tmp_path / "status.json"
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
             from main import handle_add
 
             task_id = handle_add("build calculator", max_retries=2)
@@ -22,6 +23,10 @@ class TestHandleAdd:
         assert queue[0]["id"] == task_id
         assert queue[0]["status"] == "pending"
         assert queue[0]["max_retries"] == 2
+        status = read_status(status_path)
+        assert status["worker_state"] == "idle"
+        assert status["queue_pending"] == 1
+        assert status["last_event_type"] == "task_queued"
 
 
 class TestQueueControls:
@@ -148,6 +153,35 @@ class TestRunDrain:
         queue = load_queue(queue_path)
         assert queue[0]["status"] == "failed"
         assert queue[1]["status"] == "done"
+
+    def test_run_drain_records_unexpected_exception_in_status(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        tasks_path = tmp_path / "tasks.json"
+        sandbox_root = tmp_path / "sandbox"
+
+        task_id = add_task("boom", queue_path)
+
+        with (
+            patch("main._QUEUE_FILE", queue_path),
+            patch("main._STATUS_FILE", status_path),
+            patch("main._TASKS_FILE", tasks_path),
+            patch("main.SANDBOX", sandbox_root),
+            patch("main.config.validate"),
+            patch("main.print_banner"),
+            patch("main.run_pipeline", side_effect=RuntimeError("boom")),
+        ):
+            from main import run_drain
+
+            run_drain(max_retries=2)
+
+        queue = load_queue(queue_path)
+        assert queue[0]["status"] == "failed"
+        status = read_status(status_path)
+        assert status["worker_state"] == "idle"
+        assert status["queue_failed"] == 1
+        assert status["last_task_id"] == task_id
+        assert status["last_task_description"] == "boom"
 
     def test_run_drain_repairs_stale_running_tasks_before_processing(self, tmp_path):
         queue_path = tmp_path / "q.json"
