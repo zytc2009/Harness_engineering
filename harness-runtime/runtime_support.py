@@ -1,0 +1,190 @@
+"""Shared helpers for harness-runtime CLI flows."""
+
+from __future__ import annotations
+
+import time
+from datetime import datetime
+from pathlib import Path
+
+import config
+from memory import extract_and_save_memory
+from orchestrator import SANDBOX, _read_sandbox
+from status import read_status, update_status
+from task_queue import load_queue, queue_counts, upsert_task as queue_upsert_task
+
+
+def now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def task_sandbox_dir(task_id: str, sandbox_root: Path = SANDBOX) -> Path:
+    return sandbox_root / task_id
+
+
+def queue_snapshot(queue_file: Path) -> tuple[int, int, int, int, int, int]:
+    return queue_counts(queue_file)
+
+
+def last_task_snapshot(status_file: Path) -> tuple[str | None, str | None, str | None]:
+    current = read_status(status_file) or {}
+    return (
+        current.get("last_task_id"),
+        current.get("last_task_description"),
+        current.get("last_task_finished_at"),
+    )
+
+
+def write_idle_status(queue_file: Path, status_file: Path) -> None:
+    pending, running, done, failed, cancelled, skipped = queue_snapshot(queue_file)
+    last_task_id, last_task_description, last_task_finished_at = last_task_snapshot(status_file)
+    update_status(
+        worker_state="idle",
+        current_task_id=None,
+        current_task_description=None,
+        last_task_id=last_task_id,
+        last_task_description=last_task_description,
+        phase=None,
+        task_state=None,
+        queue_pending=pending,
+        queue_running=running,
+        queue_done=done,
+        queue_failed=failed,
+        queue_cancelled=cancelled,
+        queue_skipped=skipped,
+        last_event_type="worker_idle",
+        last_event_message="queue empty",
+        last_task_finished_at=last_task_finished_at,
+        status_path=status_file,
+    )
+
+
+def queue_upsert_execution_task(
+    queue_file: Path,
+    thread_id: str,
+    description: str,
+    status: str,
+    **extra,
+) -> None:
+    existing = next((task for task in load_queue(queue_file) if task.get("id") == thread_id), None)
+    now = now_str()
+    record = {
+        "id": thread_id,
+        "description": description[:100],
+        "status": status,
+        "phase": None,
+        "retry_count": 0,
+        "max_retries": 3,
+        "error": None,
+        "created": now,
+        "updated": now,
+        "started_at": None,
+        "finished_at": None,
+        "duration_s": None,
+        "source_doc": None,
+        "source_type": None,
+        "constraints": None,
+    }
+    if existing is not None:
+        record.update(existing)
+    record.update(extra)
+    record["id"] = thread_id
+    record["description"] = description[:100]
+    record["status"] = status
+    queue_upsert_task(record, queue_file)
+
+
+def print_banner(thread_id: str, sandbox_dir: Path | None = None) -> None:
+    print("=" * 55)
+    print("  Harness Runtime - Pipeline")
+    for phase in ("architect", "implementer", "tester"):
+        provider = config._resolve_provider(phase)
+        model = config._resolve_model(phase)
+        print(f"  {phase.capitalize():<12}: {provider} / {model}")
+    if sandbox_dir is None:
+        sandbox_dir = task_sandbox_dir(thread_id)
+    print(f"  Sandbox      : {sandbox_dir}")
+    print(f"  Task ID      : {thread_id}")
+    print("=" * 55)
+
+
+def confirm(prompt: str) -> bool:
+    while True:
+        answer = input(prompt).strip().lower()
+        if answer in ("yes", "y"):
+            return True
+        if answer in ("no", "n"):
+            return False
+        print("  Please type 'yes' or 'no'.")
+
+
+def print_design_preview(sandbox_dir: Path) -> None:
+    design = _read_sandbox(sandbox_dir).get("design.md", "")
+    if not design:
+        return
+    lines = design.strip().splitlines()
+    preview = "\n  ".join(lines[:20])
+    print(f"\n[HARNESS] Architect's plan:\n  {preview}")
+    if len(lines) > 20:
+        print(f"  ... ({len(lines) - 20} more lines - see design.md in sandbox)")
+    print("\n" + "=" * 55)
+
+
+def save_memory_if_present(user_input: str, tester_report: str) -> None:
+    if not tester_report:
+        return
+    print("\n[HARNESS] Extracting long-term memory...")
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    messages = [HumanMessage(content=user_input), AIMessage(content=tester_report)]
+    summary = extract_and_save_memory(messages, user_input)
+    print(f"[HARNESS] Memory saved: {summary}\n")
+
+
+def status_callback_for_task(queue_file: Path, status_file: Path, thread_id: str, description: str, max_retries: int):
+    def callback(event: dict) -> None:
+        pending, running, done, failed, cancelled, skipped = queue_snapshot(queue_file)
+        last_task_id, last_task_description, last_task_finished_at = last_task_snapshot(status_file)
+        event_type = event.get("type")
+        phase = event.get("phase")
+        retry_count = event.get("retry_count", 0)
+        error = event.get("error")
+        message = event.get("message")
+
+        worker_state = "running"
+        task_state = "running"
+        if event_type == "pipeline_done":
+            task_state = "done"
+        elif event_type == "pipeline_failed":
+            task_state = "failed"
+        elif event_type == "pipeline_cancelled":
+            worker_state = "stopped"
+            task_state = "failed"
+
+        update_status(
+            worker_state=worker_state,
+            current_task_id=thread_id,
+            current_task_description=description,
+            last_task_id=last_task_id,
+            last_task_description=last_task_description,
+            phase=phase,
+            task_state=task_state,
+            retry_count=retry_count,
+            max_retries=max_retries,
+            queue_pending=pending,
+            queue_running=running,
+            queue_done=done,
+            queue_failed=failed,
+            queue_cancelled=cancelled,
+            queue_skipped=skipped,
+            last_event_type=event_type,
+            last_event_message=message,
+            last_task_finished_at=last_task_finished_at,
+            error=error,
+            status_path=status_file,
+        )
+
+    return callback
+
+
+def monotonic_duration(started: float) -> float:
+    return round(time.monotonic() - started, 1)

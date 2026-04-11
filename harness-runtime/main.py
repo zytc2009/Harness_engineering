@@ -1,422 +1,37 @@
 """
 Harness Runtime CLI Entry Point
 ===============================
-Supports interactive single-task execution plus queue-backed drain mode.
+Thin CLI layer for queue, drain, and interactive execution.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
-import time
-import uuid
 import warnings
-from datetime import datetime
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=Warning, module="requests")
 
 import config
-from memory import extract_and_save_memory, load_memories
-from orchestrator import SANDBOX, _read_sandbox, architect_phase, run_pipeline
-from status import read_status, update_status
-from task_queue import (
-    add_task as queue_add_task,
-    cancel_task,
-    list_queue,
-    load_queue,
-    mark_stale_running_as_failed,
-    next_pending,
-    queue_counts,
-    skip_task,
-    upsert_task as queue_upsert_task,
-    update_task as queue_update_task,
+from drain import run_drain_with_hooks
+from interactive import choose_interactive_task, run_single_task_with_hooks
+from memory import extract_and_save_memory
+from orchestrator import SANDBOX, architect_phase, run_pipeline
+from queue_cli import (
+    handle_add as queue_handle_add,
+    handle_add_file as queue_handle_add_file,
+    handle_cancel as queue_handle_cancel,
+    handle_skip as queue_handle_skip,
+    list_tasks as queue_list_tasks,
+    print_queue as queue_print_queue,
+    show_status as queue_show_status,
 )
+from runtime_support import print_banner
+from task_queue import load_queue
 
 _QUEUE_FILE = Path(__file__).parent / "task_queue.json"
 _STATUS_FILE = Path(__file__).parent / "status.json"
-_DOC_REQUIRED_SECTIONS = ("goal", "inputs", "outputs", "acceptance criteria", "status")
-
-
-def _now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _parse_task_doc_sections(text: str) -> dict[str, str]:
-    sections: dict[str, list[str]] = {}
-    current: str | None = None
-    status_inline: str | None = None
-    for raw_line in text.splitlines():
-        line = raw_line.rstrip()
-        heading = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
-        if heading:
-            current = heading.group(1).strip().lower()
-            sections.setdefault(current, [])
-            continue
-        inline_status = re.match(r"^\s*status\s*:\s*(.+?)\s*$", line, re.IGNORECASE)
-        if inline_status:
-            status_inline = inline_status.group(1).strip()
-        if current is not None:
-            sections[current].append(line)
-
-    normalized = {
-        key: "\n".join(value).strip()
-        for key, value in sections.items()
-        if "\n".join(value).strip()
-    }
-    if status_inline and "status" not in normalized:
-        normalized["status"] = status_inline
-    return normalized
-
-
-def _render_doc_task_description(sections: dict[str, str]) -> str:
-    lines = [
-        f"[Goal] {sections['goal']}",
-        f"[Input] {sections['inputs']}",
-        f"[Output] {sections['outputs']}",
-        f"[Acceptance Criteria] {sections['acceptance criteria']}",
-    ]
-    if sections.get("scope"):
-        lines.append(f"[Scope] {sections['scope']}")
-    if sections.get("constraints"):
-        lines.append(f"[Constraints] {sections['constraints']}")
-    if sections.get("open questions"):
-        lines.append(f"[Open Questions] {sections['open questions']}")
-    return "\n".join(lines)
-
-
-def _parse_constraints(section_text: str) -> dict[str, str]:
-    constraints: dict[str, str] = {}
-    for raw_line in section_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith(("-", "*")):
-            line = line[1:].strip()
-        key, sep, value = line.partition(":")
-        if not sep:
-            continue
-        key = key.strip().lower().replace(" ", "_")
-        value = value.strip()
-        if key and value:
-            constraints[key] = value
-    return constraints
-
-
-def _load_task_doc(doc_path: str | Path) -> tuple[Path, str, dict[str, str]]:
-    path = Path(doc_path).resolve()
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Task document not found: {path}")
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        raise ValueError(f"Task document is empty: {path}")
-    sections = _parse_task_doc_sections(text)
-    missing = [name for name in _DOC_REQUIRED_SECTIONS if not sections.get(name)]
-    if missing:
-        raise ValueError(f"Task document missing required sections: {', '.join(missing)}")
-    if sections["status"].strip().lower() != "ready":
-        raise ValueError(f"Task document is not ready for enqueue: {path}")
-    constraints = _parse_constraints(sections.get("constraints", ""))
-    return path, _render_doc_task_description(sections), constraints
-
-
-def _incomplete_tasks() -> list[dict]:
-    return [task for task in load_queue(_QUEUE_FILE) if task.get("status") in ("running", "failed")]
-
-
-def _queue_upsert_execution_task(thread_id: str, description: str, status: str, **extra) -> None:
-    existing = next((task for task in load_queue(_QUEUE_FILE) if task.get("id") == thread_id), None)
-    now = _now()
-    record = {
-        "id": thread_id,
-        "description": description[:100],
-        "status": status,
-        "phase": None,
-        "retry_count": 0,
-        "max_retries": 3,
-        "error": None,
-        "created": now,
-        "updated": now,
-        "started_at": None,
-        "finished_at": None,
-        "duration_s": None,
-        "source_doc": None,
-        "source_type": None,
-        "constraints": None,
-    }
-    if existing is not None:
-        record.update(existing)
-    record.update(extra)
-    record["id"] = thread_id
-    record["description"] = description[:100]
-    record["status"] = status
-    queue_upsert_task(record, _QUEUE_FILE)
-
-
-def _task_sandbox_dir(task_id: str) -> Path:
-    return SANDBOX / task_id
-
-
-def _confirm(prompt: str) -> bool:
-    while True:
-        answer = input(prompt).strip().lower()
-        if answer in ("yes", "y"):
-            return True
-        if answer in ("no", "n"):
-            return False
-        print("  Please type 'yes' or 'no'.")
-
-
-def _print_design_preview(sandbox_dir: Path) -> None:
-    design = _read_sandbox(sandbox_dir).get("design.md", "")
-    if not design:
-        return
-    lines = design.strip().splitlines()
-    preview = "\n  ".join(lines[:20])
-    print(f"\n[HARNESS] Architect's plan:\n  {preview}")
-    if len(lines) > 20:
-        print(f"  ... ({len(lines) - 20} more lines - see design.md in sandbox)")
-    print("\n" + "=" * 55)
-
-
-def _queue_snapshot() -> tuple[int, int, int, int, int, int]:
-    return queue_counts(_QUEUE_FILE)
-
-
-def _last_task_snapshot() -> tuple[str | None, str | None, str | None]:
-    current = read_status(_STATUS_FILE) or {}
-    return (
-        current.get("last_task_id"),
-        current.get("last_task_description"),
-        current.get("last_task_finished_at"),
-    )
-
-
-def _write_idle_status() -> None:
-    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-    last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
-    update_status(
-        worker_state="idle",
-        current_task_id=None,
-        current_task_description=None,
-        last_task_id=last_task_id,
-        last_task_description=last_task_description,
-        phase=None,
-        task_state=None,
-        queue_pending=pending,
-        queue_running=running,
-        queue_done=done,
-        queue_failed=failed,
-        queue_cancelled=cancelled,
-        queue_skipped=skipped,
-        last_event_type="worker_idle",
-        last_event_message="queue empty",
-        last_task_finished_at=last_task_finished_at,
-        status_path=_STATUS_FILE,
-    )
-
-
-def print_banner(thread_id: str, sandbox_dir: Path | None = None) -> None:
-    print("=" * 55)
-    print("  Harness Runtime - Pipeline")
-    for phase in ("architect", "implementer", "tester"):
-        provider = config._resolve_provider(phase)
-        model = config._resolve_model(phase)
-        print(f"  {phase.capitalize():<12}: {provider} / {model}")
-    if sandbox_dir is None:
-        sandbox_dir = _task_sandbox_dir(thread_id)
-    print(f"  Sandbox      : {sandbox_dir}")
-    print(f"  Task ID      : {thread_id}")
-    print("=" * 55)
-
-
-def list_tasks() -> None:
-    tasks = load_queue(_QUEUE_FILE)
-    if not tasks:
-        print("No saved tasks.")
-        return
-    print(f"\n{'ID':<36}  {'Status':<10}  {'Phase':<12}  {'Retries':<7}  {'Duration':>8}  {'Updated':<19}  Description")
-    print("-" * 120)
-    for task in reversed(tasks):
-        phase = task.get("phase", "-")
-        retries = str(task.get("retry_count", "-"))
-        duration = task.get("duration_s")
-        duration_str = f"{duration}s" if duration is not None else "-"
-        error = f"  ! {task['error']}" if task.get("error") else ""
-        print(
-            f"{task['id']}  {task['status']:<10}  {phase:<12}  {retries:<7}  {duration_str:>8}  "
-            f"{task['updated']:<19}  {task['description']}{error}"
-        )
-    print()
-
-
-def handle_add(description: str, max_retries: int = 3) -> str:
-    task_id = queue_add_task(description, _QUEUE_FILE, max_retries=max_retries)
-    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-    last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
-    update_status(
-        worker_state="idle",
-        current_task_id=None,
-        current_task_description=None,
-        last_task_id=last_task_id,
-        last_task_description=last_task_description,
-        phase=None,
-        task_state=None,
-        queue_pending=pending,
-        queue_running=running,
-        queue_done=done,
-        queue_failed=failed,
-        queue_cancelled=cancelled,
-        queue_skipped=skipped,
-        last_event_type="task_queued",
-        last_event_message=f"task queued: {task_id}",
-        last_task_finished_at=last_task_finished_at,
-        status_path=_STATUS_FILE,
-    )
-    print(f"[HARNESS] Task added: {task_id}")
-    print(f"  Description: {description}")
-    print("  Run 'python main.py --drain' to process queued tasks.")
-    return task_id
-
-
-def handle_add_file(doc_path: str, max_retries: int = 3) -> str:
-    resolved_doc_path, description, constraints = _load_task_doc(doc_path)
-    task_id = queue_add_task(
-        description,
-        _QUEUE_FILE,
-        max_retries=max_retries,
-        source_doc=str(resolved_doc_path),
-        source_type="task_doc",
-        constraints=constraints,
-    )
-    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-    last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
-    update_status(
-        worker_state="idle",
-        current_task_id=None,
-        current_task_description=None,
-        last_task_id=last_task_id,
-        last_task_description=last_task_description,
-        phase=None,
-        task_state=None,
-        queue_pending=pending,
-        queue_running=running,
-        queue_done=done,
-        queue_failed=failed,
-        queue_cancelled=cancelled,
-        queue_skipped=skipped,
-        last_event_type="task_queued",
-        last_event_message=f"task queued from doc: {task_id}",
-        last_task_finished_at=last_task_finished_at,
-        status_path=_STATUS_FILE,
-    )
-    print(f"[HARNESS] Task added from doc: {task_id}")
-    print(f"  Source: {resolved_doc_path}")
-    print("  Run 'python main.py --drain' to process queued tasks.")
-    return task_id
-
-
-def handle_cancel(task_id: str) -> None:
-    cancel_task(task_id, _QUEUE_FILE)
-    print(f"[HARNESS] Task cancelled: {task_id}")
-    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-    last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
-    update_status(
-        worker_state="idle",
-        current_task_id=None,
-        current_task_description=None,
-        last_task_id=last_task_id,
-        last_task_description=last_task_description,
-        phase=None,
-        task_state=None,
-        queue_pending=pending,
-        queue_running=running,
-        queue_done=done,
-        queue_failed=failed,
-        queue_cancelled=cancelled,
-        queue_skipped=skipped,
-        last_event_type="task_cancelled",
-        last_event_message=f"task cancelled: {task_id}",
-        last_task_finished_at=last_task_finished_at,
-        status_path=_STATUS_FILE,
-    )
-
-
-def handle_skip(task_id: str) -> None:
-    skip_task(task_id, _QUEUE_FILE)
-    print(f"[HARNESS] Task skipped: {task_id}")
-    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-    last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
-    update_status(
-        worker_state="idle",
-        current_task_id=None,
-        current_task_description=None,
-        last_task_id=last_task_id,
-        last_task_description=last_task_description,
-        phase=None,
-        task_state=None,
-        queue_pending=pending,
-        queue_running=running,
-        queue_done=done,
-        queue_failed=failed,
-        queue_cancelled=cancelled,
-        queue_skipped=skipped,
-        last_event_type="task_skipped",
-        last_event_message=f"task skipped: {task_id}",
-        last_task_finished_at=last_task_finished_at,
-        status_path=_STATUS_FILE,
-    )
-
-
-def show_status() -> None:
-    data = read_status(_STATUS_FILE)
-    if data is None:
-        print("[HARNESS] No status available. Worker has not run yet.")
-        return
-    print("\n" + "=" * 55)
-    print("  HARNESS STATUS")
-    print("=" * 55)
-    print(f"  Worker      : {data.get('worker_state', 'unknown')}")
-    print(f"  Task State  : {data.get('task_state', '-')}")
-    if data.get("current_task_id"):
-        print(f"  Task ID     : {data['current_task_id']}")
-        print(f"  Description : {data.get('current_task_description', '-')}")
-        print(f"  Phase       : {data.get('phase', '-')}")
-        print(f"  Retries     : {data.get('retry_count', 0)}/{data.get('max_retries', 3)}")
-    elif data.get("last_task_id"):
-        print(f"  Last Task   : {data['last_task_id']}")
-        print(f"  Last Desc   : {data.get('last_task_description', '-')}")
-        print(f"  Last Done   : {data.get('last_task_finished_at', '-')}")
-    print(
-        f"  Queue       : {data.get('queue_pending', 0)} pending, "
-        f"{data.get('queue_running', 0)} running, "
-        f"{data.get('queue_done', 0)} done, "
-        f"{data.get('queue_failed', 0)} failed, "
-        f"{data.get('queue_cancelled', 0)} cancelled, "
-        f"{data.get('queue_skipped', 0)} skipped"
-    )
-    if data.get("last_event_type"):
-        print(f"  Last Event  : {data['last_event_type']}")
-    if data.get("last_event_message"):
-        print(f"  Event Msg   : {data['last_event_message']}")
-    if data.get("error"):
-        print(f"  Error       : {data['error']}")
-    print(f"  Updated     : {data.get('updated', '-')}")
-    print("=" * 55 + "\n")
-
-
-def _print_queue() -> None:
-    queue = list_queue(_QUEUE_FILE)
-    if not queue:
-        print("[HARNESS] Queue is empty.")
-        return
-    print(f"\n{'ID':<36}  {'Status':<10}  {'Created':<19}  Description")
-    print("-" * 110)
-    for task in queue:
-        source = f"  [{Path(task['source_doc']).name}]" if task.get("source_doc") else ""
-        print(f"{task['id']}  {task['status']:<10}  {task['created']:<19}  {task['description'][:60]}{source}")
-    print()
 
 
 def _save_memory_if_present(user_input: str, tester_report: str) -> None:
@@ -430,497 +45,68 @@ def _save_memory_if_present(user_input: str, tester_report: str) -> None:
     print(f"[HARNESS] Memory saved: {summary}\n")
 
 
-def _status_callback_for_task(thread_id: str, description: str, max_retries: int):
-    def callback(event: dict) -> None:
-        pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-        last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
-        event_type = event.get("type")
-        phase = event.get("phase")
-        retry_count = event.get("retry_count", 0)
-        error = event.get("error")
-        message = event.get("message")
+def list_tasks() -> None:
+    queue_list_tasks(_QUEUE_FILE)
 
-        worker_state = "running"
-        task_state = "running"
-        if event_type == "pipeline_done":
-            task_state = "done"
-        elif event_type == "pipeline_failed":
-            task_state = "failed"
-        elif event_type == "pipeline_cancelled":
-            worker_state = "stopped"
-            task_state = "failed"
 
-        update_status(
-            worker_state=worker_state,
-            current_task_id=thread_id,
-            current_task_description=description,
-            last_task_id=last_task_id,
-            last_task_description=last_task_description,
-            phase=phase,
-            task_state=task_state,
-            retry_count=retry_count,
-            max_retries=max_retries,
-            queue_pending=pending,
-            queue_running=running,
-            queue_done=done,
-            queue_failed=failed,
-            queue_cancelled=cancelled,
-            queue_skipped=skipped,
-            last_event_type=event_type,
-            last_event_message=message,
-            last_task_finished_at=last_task_finished_at,
-            error=error,
-            status_path=_STATUS_FILE,
-        )
+def handle_add(description: str, max_retries: int = 3) -> str:
+    return queue_handle_add(description, max_retries, _QUEUE_FILE, _STATUS_FILE)
 
-    return callback
+
+def handle_add_file(doc_path: str, max_retries: int = 3) -> str:
+    return queue_handle_add_file(doc_path, max_retries, _QUEUE_FILE, _STATUS_FILE)
+
+
+def handle_cancel(task_id: str) -> None:
+    queue_handle_cancel(task_id, _QUEUE_FILE, _STATUS_FILE)
+
+
+def handle_skip(task_id: str) -> None:
+    queue_handle_skip(task_id, _QUEUE_FILE, _STATUS_FILE)
+
+
+def show_status() -> None:
+    queue_show_status(_STATUS_FILE)
+
+
+def _print_queue() -> None:
+    queue_print_queue(_QUEUE_FILE)
 
 
 def run_drain(max_retries: int = 3) -> None:
-    config.validate()
-    repaired = mark_stale_running_as_failed(_QUEUE_FILE)
-    if repaired:
-        print(f"[HARNESS] Recovered {repaired} interrupted running task(s).")
-
-    while True:
-        task = next_pending(_QUEUE_FILE)
-        if task is None:
-            _write_idle_status()
-            print("\n[HARNESS] Queue empty. Drain finished.")
-            return
-
-        thread_id = task["id"]
-        user_input = task["description"]
-        task_max_retries = int(task.get("max_retries") or max_retries)
-        task_metadata = {"constraints": task.get("constraints") or {}}
-        sandbox_dir = _task_sandbox_dir(thread_id)
-        print_banner(thread_id, sandbox_dir)
-
-        queue_update_task(
-            thread_id,
-            queue_path=_QUEUE_FILE,
-            status="running",
-            phase="architect",
-            started_at=task.get("started_at") or _now(),
-            error=None,
-            max_retries=task_max_retries,
-        )
-        _queue_upsert_execution_task(
-            thread_id,
-            user_input,
-            "running",
-            phase="architect",
-            retry_count=0,
-            source_doc=task.get("source_doc"),
-            source_type=task.get("source_type"),
-        )
-        callback = _status_callback_for_task(thread_id, user_input, task_max_retries)
-        callback({
-            "type": "phase_started",
-            "phase": "architect",
-            "retry_count": 0,
-            "error": None,
-            "message": "architect started",
-        })
-
-        started = time.monotonic()
-        try:
-            result = run_pipeline(
-                task=user_input,
-                start_phase="architect",
-                max_retries=task_max_retries,
-                sandbox_dir=sandbox_dir,
-                on_status=callback,
-                task_metadata=task_metadata,
-            )
-        except KeyboardInterrupt:
-            duration = round(time.monotonic() - started, 1)
-            queue_update_task(
-                thread_id,
-                queue_path=_QUEUE_FILE,
-                status="failed",
-                phase="interrupted",
-                error="interrupted",
-                duration_s=duration,
-                finished_at=_now(),
-            )
-            _queue_upsert_execution_task(
-                thread_id,
-                user_input,
-                "failed",
-                phase="interrupted",
-                duration_s=duration,
-                error="interrupted",
-                source_doc=task.get("source_doc"),
-                source_type=task.get("source_type"),
-            )
-            pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-            update_status(
-                worker_state="stopped",
-                current_task_id=thread_id,
-                current_task_description=user_input,
-                last_task_id=task.get("id"),
-                last_task_description=user_input,
-                phase="interrupted",
-                task_state="failed",
-                retry_count=0,
-                max_retries=task_max_retries,
-                queue_pending=pending,
-                queue_running=running,
-                queue_done=done,
-                queue_failed=failed,
-                queue_cancelled=cancelled,
-                queue_skipped=skipped,
-                last_event_type="pipeline_interrupted",
-                last_event_message="worker interrupted during task execution",
-                last_task_finished_at=_now(),
-                error="interrupted",
-                status_path=_STATUS_FILE,
-            )
-            print("\n[HARNESS] Interrupted. Remaining pending tasks were left untouched.")
-            return
-        except Exception as exc:
-            duration = round(time.monotonic() - started, 1)
-            finished_at = _now()
-            queue_update_task(
-                thread_id,
-                queue_path=_QUEUE_FILE,
-                status="failed",
-                phase="error",
-                error=str(exc)[:200],
-                duration_s=duration,
-                finished_at=finished_at,
-            )
-            _queue_upsert_execution_task(
-                thread_id,
-                user_input,
-                "failed",
-                phase="error",
-                duration_s=duration,
-                error=str(exc)[:200],
-                source_doc=task.get("source_doc"),
-                source_type=task.get("source_type"),
-            )
-            pending, running, done, failed_count, cancelled, skipped = _queue_snapshot()
-            update_status(
-                worker_state="running",
-                current_task_id=thread_id,
-                current_task_description=user_input,
-                last_task_id=thread_id,
-                last_task_description=user_input,
-                phase="error",
-                task_state="failed",
-                retry_count=0,
-                max_retries=task_max_retries,
-                queue_pending=pending,
-                queue_running=running,
-                queue_done=done,
-                queue_failed=failed_count,
-                queue_cancelled=cancelled,
-                queue_skipped=skipped,
-                last_event_type="pipeline_failed",
-                last_event_message="task raised an exception",
-                last_task_finished_at=finished_at,
-                error=str(exc)[:200],
-                status_path=_STATUS_FILE,
-            )
-            print(f"\n[HARNESS] Task failed: {exc}")
-            print("[HARNESS] Moving to next task...")
-            continue
-
-        duration = round(time.monotonic() - started, 1)
-        failed = bool(result.get("failed"))
-        final_status = "failed" if failed else "done"
-        final_error = "tests_failed" if failed else None
-        finished_at = _now()
-
-        queue_update_task(
-            thread_id,
-            queue_path=_QUEUE_FILE,
-            status=final_status,
-            phase=result["phase"],
-            retry_count=result["retry_count"],
-            duration_s=duration,
-            finished_at=finished_at,
-            error=final_error,
-        )
-        _queue_upsert_execution_task(
-            thread_id,
-            user_input,
-            final_status,
-            phase=result["phase"],
-            retry_count=result["retry_count"],
-            duration_s=duration,
-            source_doc=task.get("source_doc"),
-            source_type=task.get("source_type"),
-            **({"error": final_error} if final_error else {}),
-        )
-        pending, running, done, failed_count, cancelled, skipped = _queue_snapshot()
-        update_status(
-            worker_state="running",
-            current_task_id=thread_id,
-            current_task_description=user_input,
-            last_task_id=thread_id,
-            last_task_description=user_input,
-            phase=result["phase"],
-            task_state=final_status,
-            retry_count=result["retry_count"],
-            max_retries=task_max_retries,
-            queue_pending=pending,
-            queue_running=running,
-            queue_done=done,
-            queue_failed=failed_count,
-            queue_cancelled=cancelled,
-            queue_skipped=skipped,
-            last_event_type="pipeline_failed" if failed else "pipeline_done",
-            last_event_message="task failed after retries" if failed else "task completed",
-            last_task_finished_at=finished_at,
-            error=final_error,
-            status_path=_STATUS_FILE,
-        )
-
-        _save_memory_if_present(user_input, result.get("tester_report", ""))
-        print(f"[HARNESS] Task {final_status}: {thread_id}")
-        if failed:
-            print("[HARNESS] Moving to next task...")
+    run_drain_with_hooks(
+        max_retries,
+        _QUEUE_FILE,
+        _STATUS_FILE,
+        sandbox_root=SANDBOX,
+        print_banner_fn=print_banner,
+        run_pipeline_fn=run_pipeline,
+        save_memory_if_present_fn=_save_memory_if_present,
+    )
 
 
 def _choose_interactive_task() -> tuple[str, str, str]:
-    thread_id: str
-    user_input: str
-    start_phase = "architect"
-
-    incomplete = _incomplete_tasks()
-    if incomplete:
-        print(f"\n[HARNESS] Found {len(incomplete)} incomplete task(s):")
-        for index, task in enumerate(incomplete, 1):
-            print(f"  [{index}] {task['id'][:8]}...  {task['updated']}  {task['description']}")
-        print("  [N] Start a new task")
-        choice = input("\nResume which? (1/2/.../N): ").strip().upper()
-        if choice.isdigit() and 1 <= int(choice) <= len(incomplete):
-            picked = incomplete[int(choice) - 1]
-            print(f"\n[HARNESS] Resuming: {picked['description']}")
-            return picked["id"], picked["description"], "implementer"
-
-    thread_id = str(uuid.uuid4())
-    memories = load_memories()
-    if memories:
-        print(f"[HARNESS] Found {len(memories)} memory record(s).")
-        print(f"          Last: {memories[-1]['date']} - {memories[-1]['summary'][:60]}...")
-    else:
-        print("[HARNESS] No long-term memory found. Starting fresh.")
-    print("\nDescribe your task:")
-    user_input = input("Task: ").strip()
-    return thread_id, user_input, start_phase
+    return choose_interactive_task(_QUEUE_FILE)
 
 
 def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retries: int) -> None:
-    sandbox_dir = _task_sandbox_dir(thread_id)
-    print_banner(thread_id, sandbox_dir)
-    _queue_upsert_execution_task(
+    from runtime_support import confirm, print_design_preview
+
+    run_single_task_with_hooks(
         thread_id,
         user_input,
-        "running",
-        phase=start_phase,
-        retry_count=0,
-        started_at=_now(),
-        max_retries=max_retries,
+        start_phase,
+        max_retries,
+        _QUEUE_FILE,
+        _STATUS_FILE,
+        sandbox_root=SANDBOX,
+        print_banner_fn=print_banner,
+        architect_phase_fn=architect_phase,
+        run_pipeline_fn=run_pipeline,
+        print_design_preview_fn=print_design_preview,
+        confirm_fn=confirm,
+        save_memory_if_present_fn=_save_memory_if_present,
     )
-    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-    last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
-    update_status(
-        worker_state="running",
-        current_task_id=thread_id,
-        current_task_description=user_input,
-        last_task_id=last_task_id,
-        last_task_description=last_task_description,
-        phase=start_phase,
-        task_state="running",
-        retry_count=0,
-        max_retries=max_retries,
-        queue_pending=pending,
-        queue_running=running,
-        queue_done=done,
-        queue_failed=failed,
-        queue_cancelled=cancelled,
-        queue_skipped=skipped,
-        last_event_type="phase_started",
-        last_event_message=f"{start_phase} started",
-        last_task_finished_at=last_task_finished_at,
-        status_path=_STATUS_FILE,
-    )
-
-    started = time.monotonic()
-    try:
-        if start_phase == "architect":
-            architect_phase(user_input, sandbox_dir=sandbox_dir, task_metadata={"constraints": {}})
-            _print_design_preview(sandbox_dir)
-            if not _confirm("  Proceed with implementation? (yes/no): "):
-                print("  [HARNESS] Implementation cancelled.")
-                _queue_upsert_execution_task(thread_id, user_input, "failed", phase="cancelled", error="cancelled")
-                pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-                update_status(
-                    worker_state="stopped",
-                    current_task_id=thread_id,
-                    current_task_description=user_input,
-                    last_task_id=last_task_id,
-                    last_task_description=last_task_description,
-                    phase="cancelled",
-                    task_state="failed",
-                    retry_count=0,
-                    max_retries=max_retries,
-                    queue_pending=pending,
-                    queue_running=running,
-                    queue_done=done,
-                    queue_failed=failed,
-                    queue_cancelled=cancelled,
-                    queue_skipped=skipped,
-                    last_event_type="pipeline_cancelled",
-                    last_event_message="interactive task cancelled before implementation",
-                    last_task_finished_at=last_task_finished_at,
-                    error="cancelled",
-                    status_path=_STATUS_FILE,
-                )
-                return
-            start_phase = "implementer"
-
-        print("\n[HARNESS] Starting pipeline...\n")
-        result = run_pipeline(
-            task=user_input,
-            start_phase=start_phase,
-            max_retries=max_retries,
-            sandbox_dir=sandbox_dir,
-            task_metadata={"constraints": {}},
-        )
-    except KeyboardInterrupt:
-        duration = round(time.monotonic() - started, 1)
-        print("\n\n[HARNESS] Interrupted.")
-        _queue_upsert_execution_task(
-            thread_id,
-            user_input,
-            "failed",
-            phase="interrupted",
-            duration_s=duration,
-            error="KeyboardInterrupt",
-        )
-        pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-        update_status(
-            worker_state="stopped",
-            current_task_id=thread_id,
-            current_task_description=user_input,
-            last_task_id=thread_id,
-            last_task_description=user_input,
-            phase="interrupted",
-            task_state="failed",
-            retry_count=0,
-            max_retries=max_retries,
-            queue_pending=pending,
-            queue_running=running,
-            queue_done=done,
-            queue_failed=failed,
-            queue_cancelled=cancelled,
-            queue_skipped=skipped,
-            last_event_type="pipeline_interrupted",
-            last_event_message="interactive task interrupted",
-            last_task_finished_at=_now(),
-            error="KeyboardInterrupt",
-            status_path=_STATUS_FILE,
-        )
-        print(f"[HARNESS] Resume with: python main.py --resume {thread_id}\n")
-        return
-    except Exception as exc:
-        duration = round(time.monotonic() - started, 1)
-        print(f"\n[HARNESS] Error: {exc}")
-        _queue_upsert_execution_task(thread_id, user_input, "failed", duration_s=duration, error=str(exc)[:200])
-        pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-        update_status(
-            worker_state="stopped",
-            current_task_id=thread_id,
-            current_task_description=user_input,
-            last_task_id=thread_id,
-            last_task_description=user_input,
-            phase="error",
-            task_state="failed",
-            retry_count=0,
-            max_retries=max_retries,
-            queue_pending=pending,
-            queue_running=running,
-            queue_done=done,
-            queue_failed=failed,
-            queue_cancelled=cancelled,
-            queue_skipped=skipped,
-            last_event_type="pipeline_failed",
-            last_event_message="interactive task raised an exception",
-            last_task_finished_at=_now(),
-            error=str(exc)[:200],
-            status_path=_STATUS_FILE,
-        )
-        raise
-
-    duration = round(time.monotonic() - started, 1)
-    print("\n" + "=" * 55)
-    print("  FINAL RESPONSE")
-    print("=" * 55)
-    if result.get("failed"):
-        print("Tests did not pass after all retries.")
-    elif result["phase"] == "cancelled":
-        print("Task cancelled by user.")
-    else:
-        print("Pipeline complete.")
-
-    report = result.get("tester_report", "")
-    if report:
-        print("\nTester report:")
-        print(report[:800])
-
-    sandbox_files = _read_sandbox(sandbox_dir)
-    if sandbox_files:
-        print(f"\nFiles in sandbox ({len(sandbox_files)}):")
-        for name in sorted(sandbox_files):
-            print(f"  {name}")
-    print(f"\nSandbox path: {sandbox_dir}")
-    print("=" * 55)
-    print(f"  Phase     : {result['phase']}")
-    print(f"  Retries   : {result['retry_count']}/{max_retries}")
-    print(f"  Duration  : {duration}s")
-    print("=" * 55)
-
-    status = "failed" if result.get("failed") else "done"
-    _queue_upsert_execution_task(
-        thread_id,
-        user_input,
-        status,
-        phase=result["phase"],
-        retry_count=result["retry_count"],
-        duration_s=duration,
-        **({"error": "tests_failed"} if result.get("failed") else {}),
-    )
-    finished_at = _now()
-    pending, running, done, failed, cancelled, skipped = _queue_snapshot()
-    update_status(
-        worker_state="idle",
-        current_task_id=None,
-        current_task_description=None,
-        last_task_id=thread_id,
-        last_task_description=user_input,
-        phase=result["phase"],
-        task_state=status,
-        retry_count=result["retry_count"],
-        max_retries=max_retries,
-        queue_pending=pending,
-        queue_running=running,
-        queue_done=done,
-        queue_failed=failed,
-        queue_cancelled=cancelled,
-        queue_skipped=skipped,
-        last_event_type="pipeline_failed" if result.get("failed") else "pipeline_done",
-        last_event_message="interactive task failed" if result.get("failed") else "interactive task completed",
-        last_task_finished_at=finished_at,
-        error="tests_failed" if result.get("failed") else None,
-        status_path=_STATUS_FILE,
-    )
-    _save_memory_if_present(user_input, report)
-    print(f"[HARNESS] Task ID: {thread_id}\n")
 
 
 def main() -> None:
