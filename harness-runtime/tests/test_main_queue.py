@@ -1,5 +1,6 @@
 """Tests for queue/drain behavior in main.py."""
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -676,3 +677,52 @@ class TestShowStatus:
         assert "Task ID     : run-123" in output
         assert "Description : running task" in output
         assert "Last Task   :" not in output
+
+
+class TestJsonViews:
+    def test_show_status_json_prints_machine_readable_snapshot(self, tmp_path, capsys):
+        status_path = tmp_path / "status.json"
+
+        from status import update_status
+
+        update_status(
+            worker_state="idle",
+            current_task_id=None,
+            current_task_description=None,
+            last_task_id="done-123",
+            last_task_description="last completed task",
+            phase="done",
+            task_state="done",
+            queue_pending=0,
+            queue_running=0,
+            queue_done=1,
+            queue_failed=0,
+            queue_cancelled=0,
+            queue_skipped=0,
+            last_event_type="worker_idle",
+            last_event_message="queue empty",
+            last_task_finished_at="2026-04-10 12:00:00",
+            status_path=status_path,
+        )
+
+        with patch("main._STATUS_FILE", status_path):
+            from main import show_status_json
+
+            show_status_json()
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["worker_state"] == "idle"
+        assert payload["last_task_id"] == "done-123"
+
+    def test_print_queue_json_outputs_queue_array(self, tmp_path, capsys):
+        queue_path = tmp_path / "q.json"
+        add_task("first", queue_path)
+        add_task("second", queue_path)
+
+        with patch("main._QUEUE_FILE", queue_path):
+            from main import _print_queue_json
+
+            _print_queue_json()
+
+        payload = json.loads(capsys.readouterr().out)
+        assert [item["description"] for item in payload] == ["first", "second"]

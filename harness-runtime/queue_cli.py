@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from status import read_status, update_status
@@ -187,6 +188,12 @@ def show_status(status_file: Path) -> None:
     print("=" * 55 + "\n")
 
 
+def show_status_json(status_file: Path) -> None:
+    data = read_status(status_file)
+    payload = data if data is not None else {"status": "unavailable"}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def print_queue(queue_file: Path) -> None:
     queue = list_queue(queue_file)
     if not queue:
@@ -198,3 +205,7 @@ def print_queue(queue_file: Path) -> None:
         source = f"  [{Path(task['source_doc']).name}]" if task.get("source_doc") else ""
         print(f"{task['id']}  {task['status']:<10}  {task['created']:<19}  {task['description'][:60]}{source}")
     print()
+
+
+def print_queue_json(queue_file: Path) -> None:
+    print(json.dumps(list_queue(queue_file), ensure_ascii=False, indent=2))

@@ -25,7 +25,9 @@ from queue_cli import (
     handle_skip as queue_handle_skip,
     list_tasks as queue_list_tasks,
     print_queue as queue_print_queue,
+    print_queue_json as queue_print_queue_json,
     show_status as queue_show_status,
+    show_status_json as queue_show_status_json,
 )
 from runtime_support import print_banner
 from task_queue import load_queue
@@ -69,8 +71,16 @@ def show_status() -> None:
     queue_show_status(_STATUS_FILE)
 
 
+def show_status_json() -> None:
+    queue_show_status_json(_STATUS_FILE)
+
+
 def _print_queue() -> None:
     queue_print_queue(_QUEUE_FILE)
+
+
+def _print_queue_json() -> None:
+    queue_print_queue_json(_QUEUE_FILE)
 
 
 def run_drain(max_retries: int = 3) -> None:
@@ -118,7 +128,9 @@ def main() -> None:
     parser.add_argument("--cancel", metavar="ID", help="Cancel a pending queued task")
     parser.add_argument("--skip", metavar="ID", help="Skip a pending queued task")
     parser.add_argument("--queue", action="store_true", help="List queued tasks")
+    parser.add_argument("--queue-json", action="store_true", help="List queued tasks as JSON")
     parser.add_argument("--status", action="store_true", help="Show current worker status")
+    parser.add_argument("--status-json", action="store_true", help="Show current worker status as JSON")
     parser.add_argument("--drain", action="store_true", help="Process all pending queue tasks and exit")
     parser.add_argument(
         "--phase",
@@ -148,8 +160,14 @@ def main() -> None:
     if args.queue:
         _print_queue()
         return
+    if args.queue_json:
+        _print_queue_json()
+        return
     if args.status:
         show_status()
+        return
+    if args.status_json:
+        show_status_json()
         return
     if args.drain:
         max_retries = int(config.get_setting("MAX_RETRIES", "3"))
