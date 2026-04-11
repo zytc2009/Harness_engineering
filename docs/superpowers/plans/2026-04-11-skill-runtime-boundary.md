@@ -295,9 +295,8 @@ python harness-runtime/main.py --add-file docs/tasks/task-001.md
 
 ## Open Follow-Ups
 
-1. add a canonical task template under `docs/tasks/`
-2. decide whether `Constraints` should stay markdown-only or also be parsed into structured metadata
-3. define how design artifacts from S1-S3 are referenced when they exist
+1. decide whether `Constraints` should stay markdown-only or also be parsed into structured metadata
+2. define how design artifacts from S1-S3 are referenced when they exist
 
 ## Decision
 

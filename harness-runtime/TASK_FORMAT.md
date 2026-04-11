@@ -73,6 +73,12 @@ Phase 1 implements a reliable drain worker. `--drain` processes all current pend
 
 `python main.py --add-file <path>` accepts a markdown task document instead of a single inline string.
 
+Canonical template:
+
+```text
+docs/tasks/task-template.md
+```
+
 Minimum required sections:
 
 ```markdown

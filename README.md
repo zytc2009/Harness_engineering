@@ -355,6 +355,7 @@ Task document enqueue:
 - `--add-file` expects a markdown task document with `Goal`, `Inputs`, `Outputs`, `Acceptance Criteria`, and `Status`
 - only documents with `Status: ready` or a `## Status` section set to `ready` are accepted
 - runtime stores the original task document path as `source_doc` so queue/status views can point back to the requirement source
+- canonical task template: `docs/tasks/task-template.md`
 
 Additional files:
 
