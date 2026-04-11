@@ -123,6 +123,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _HARNESS_CONTEXT_FILES: dict[str, tuple[str, ...]] = {
     "harness-cpp": ("HARNESS.md", "TASK_PROTOCOL.md"),
 }
+_HARNESS_ROLE_FILES: dict[str, dict[str, str]] = {
+    "harness-cpp": {
+        "architect": "roles/architect.md",
+        "implementer": "roles/implementer.md",
+        "tester": "roles/test-engineer.md",
+    }
+}
 
 
 def get_prompt_for_phase(phase: str) -> str:
@@ -146,6 +153,19 @@ def _load_harness_context(harness_name: str) -> str:
     return "\n\n".join(parts)
 
 
+def _load_role_context(harness_name: str, phase: str) -> str:
+    role_file = _HARNESS_ROLE_FILES.get(harness_name, {}).get(phase)
+    if not role_file:
+        return ""
+    path = _REPO_ROOT / harness_name / role_file
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return ""
+    return f"## {harness_name}/{role_file}\n{text}"
+
+
 def get_system_prompt(phase: str, task_metadata: dict | None = None) -> str:
     """Assemble the full system prompt: base rules + role prompt + metadata + memory."""
     base = _BASE_PROMPT.strip()
@@ -163,6 +183,9 @@ def get_system_prompt(phase: str, task_metadata: dict | None = None) -> str:
     harness_context = _load_harness_context(harness_name) if harness_name else ""
     if harness_context:
         parts.append("## Harness Context\n" + harness_context)
+    role_context = _load_role_context(harness_name, phase) if harness_name else ""
+    if role_context:
+        parts.append("## Harness Role Context\n" + role_context)
 
     if memory_block:
         parts.append(memory_block)

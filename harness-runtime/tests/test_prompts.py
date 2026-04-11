@@ -64,3 +64,17 @@ class TestGetSystemPrompt:
         )
         assert "Harness Context" in prompt
         assert "C++20 only" in prompt
+
+    def test_includes_phase_specific_role_context_when_present(self, monkeypatch):
+        monkeypatch.setattr(
+            "prompts._load_role_context",
+            lambda harness_name, phase: "## harness-cpp/roles/implementer.md\nRAII only"
+            if harness_name == "harness-cpp" and phase == "implementer"
+            else "",
+        )
+        prompt = get_system_prompt(
+            "implementer",
+            task_metadata={"constraints": {"harness": "harness-cpp"}},
+        )
+        assert "Harness Role Context" in prompt
+        assert "RAII only" in prompt
