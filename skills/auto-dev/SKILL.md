@@ -1,204 +1,175 @@
 ---
 name: auto-dev
-description: C++ 自动化闭环开发。当用户说 "/auto-dev <需求文档>"、"自动开发"、"闭环开发"、"自动实现这个需求" 时触发。读取需求文档，拆解为原子任务，按依赖图事件驱动调度（依赖满足即启动，无需等待同层其他任务），每个任务走 实现→测试→lint→审查 闭环，测试失败自动修复（每任务最多 3 轮）。
+description: 通用需求澄清与任务入队 skill。用于和用户沟通需求、补齐约束、生成规范任务文档，并委托给 harness-runtime 批量执行。
 ---
 
-# auto-dev — C++ 闭环自动开发
+# auto-dev
 
-> **auto-dev 是编排器，harness-cpp 是约束系统。**
-> auto-dev 负责 WHAT（任务调度），harness-cpp 负责 HOW（执行约束）。
+> `auto-dev` 是入口 skill，不是执行引擎。
+> 它负责把模糊需求整理成可执行任务，然后交给 `harness-runtime`。
 
----
+## 角色定位
 
-## 触发方式
+`auto-dev` 只有两个职责：
 
-```
-/auto-dev <需求文档路径>
-/auto-dev docs/requirement.md
+1. 和用户沟通需求
+2. 生成任务文档并入队
 
-# 选项
-/auto-dev --skip-design docs/req.md        # 已有设计文档，跳过 Phase 1
-/auto-dev --platforms windows,macos docs/req.md  # 指定多平台
-/auto-dev --test-only                       # 仅对已有代码跑测试+审查
-/auto-dev --review-only                     # 仅审查
-/auto-dev --resume                          # 从 TASK_STATE.md 恢复
-/auto-dev --orchestrator opus --workers sonnet docs/req.md  # 模型路由
-```
+`auto-dev` 不负责：
 
-无参数时，提示用户提供需求文档路径。
+- 自己执行实现
+- 自己维护运行状态
+- 自己承担完整调度循环
 
----
+执行、重试、状态推进、队列管理，统一由 `harness-runtime` 负责。
 
-## 前置条件
+当前边界设计见：
 
-1. **harness-cpp 存在** — 检查 `harness-cpp/HARNESS.md`
-2. **CMake 可用** — `cmake --version`
-3. **需求文档存在** — 路径有效且非空
+- `docs/superpowers/plans/2026-04-11-skill-runtime-boundary.md`
 
----
+## 适用场景
 
-## 状态机
+当用户存在以下意图时使用本 skill：
 
-```
-START → S0:INIT → S1:DESIGN → S2:DECOMPOSE → S3:CONFIRM
-                                                  │ 确认
-S_HALT ←── S4:SCHEDULE ←→ S5:WAIT ←→ S6:ON_COMPLETE
-                                          │ 全部完成
-                                    S7:INTEGRATE → S8:FINISH
-```
+- 想把一个需求整理成规范任务
+- 需求还不够清楚，需要继续澄清
+- 希望把整理好的任务提交给 runtime 执行
 
-| 阶段 | 做什么 | 加载协议 |
-|------|--------|---------|
-| S0: INIT | 创建 `.auto-dev/` 目录、读需求和 harness、创建 TASK_STATE.md | — |
-| S1: DESIGN | 启动 architect agent → 输出设计文档 | — |
-| S2: DECOMPOSE | 拆解原子任务 + 依赖图 | — |
-| S3: CONFIRM | 展示给用户确认 | — |
-| S4-S6: 事件循环 | 依赖满足即启动，无 Batch 概念 | **读 `protocols/scheduler.md`** |
-| S7: INTEGRATE | 全量构建 + 测试 + **独立 evaluator 审查** + lint | — |
-| S8: FINISH | 报告 + LESSONS_LEARNED + 清理 | — |
+## 工作方式
 
-**核心：调度器按需加载协议文件，不一次性注入全部指令。**
+### Step 1: 澄清需求
 
----
+先判断用户描述是否已经足够清晰。
 
-## 各阶段要点
+只有当下面信息足够明确时，才能进入任务文档生成阶段：
 
-### S0-S3：初始化到确认
+- `Goal`
+- `Scope`
+- `Inputs`
+- `Outputs`
+- `Acceptance Criteria`
+- `Constraints`
 
-- **S0**: 创建 `.auto-dev/{reports,state,logs}/`，TASK_STATE.md 存 `.auto-dev/state/`
-- **S1**: architect agent 读 `harness-cpp/roles/architect.md`，输出设计文档到 `docs/design/`
-- **S2**: 原子任务标准 — 可独立编译测试、< 500 行、无文件重叠、声明 depends_on + blocks
-- **S3**: 展示依赖图，**必须**用户确认后才执行
+如果缺失或模糊，主动追问。
 
-### S4-S6：事件循环
+追问原则：
 
-**读 `protocols/scheduler.md` 获取完整调度规则。**
+- 只问缺的信息
+- 优先问会影响执行边界的问题
+- 不提前深入实现细节，除非用户明确要求
 
-核心行为：扫描依赖图 → 启动所有 ready 任务 → 等待任意完成 → 更新状态 → 循环。
+### Step 2: 生成规范任务文档
 
-### S4-S6 中启动 sub-agent 时
+需求清晰后，生成 markdown 任务文档。
 
-**读 `protocols/task-agent.md` 获取 prompt 模板和闭环控制规则。**
+最小结构：
 
-每个 sub-agent 内部闭环：实现 → 测试 → lint（`harness-cpp/linters/checks.md`）→ 审查。
+```md
+# Task
 
-### S7：集成验证
+## Goal
+...
 
-1. `cmake --build` 全量构建
-2. `ctest` 全量测试
-3. 运行 `harness-cpp/linters/checks.md` 全量 lint 检查
-4. 启动**独立 evaluator agent**（读 `harness-cpp/roles/evaluator.md`），不是让实现者自审
-5. 失败 → 归因 → 回退到事件循环（读 `protocols/recovery.md`）
+## Scope
+- In scope: ...
+- Out of scope: ...
 
-### S8：收尾
+## Inputs
+- ...
 
-1. 生成完成报告 → `.auto-dev/reports/AUTO_DEV_COMPLETION_REPORT.md`
-2. 生成 LESSONS_LEARNED → `.auto-dev/reports/LESSONS_LEARNED.md`
-3. 删除 TASK_STATE.md
-4. 提示用户 git commit
+## Outputs
+- ...
 
----
+## Acceptance Criteria
+- ...
+- ...
 
-## 断点恢复
+## Constraints
+- language: ...
+- platform: ...
+- harness: ...
+- dependency_policy: ...
+- forbidden_paths: ...
 
-检测到已有 `.auto-dev/state/TASK_STATE.md` 时，**读 `protocols/recovery.md`** 获取恢复策略。
-
----
-
-## 重要约束
-
-### 角色边界
-
-| 角色 | 能做 | 不能做 |
-|---|---|---|
-| 调度器 | 状态机、依赖图、启动/监听 agent | 写代码、测试、审查 |
-| 架构师 | 设计、接口、拆解 | 写实现 |
-| 实现者 | 写代码、修 Bug | 改接口、改 scope 外文件 |
-| 测试工程师 | 写测试、报告 | 修 Bug |
-| 审查员 | 标注问题 | 修代码 |
-| 评估者 | 独立验证、打分 | 修代码、改设计 |
-
-### Harness 集成
-
-- 角色读取 `harness-cpp/roles/<角色>.md`
-- 实现遵循 `harness-cpp/TASK_PROTOCOL.md`
-- 路径符合 `harness-cpp/IO_MAP.md`
-- 代码满足 `harness-cpp/HARNESS.md` 不变量
-- lint 检查使用 `harness-cpp/linters/checks.md`
-- 审查过 `harness-cpp/REVIEW.md`
-
-### 完成报告格式
-
-```markdown
-## auto-dev 完成报告
-
-### 需求
-<一句话>
-
-### 任务执行摘要
-| 任务 | 状态 | 重试 | 产出文件 |
-|------|------|------|---------|
-
-### 并发效率
-- 任务总数 / 最大并发 / 总重试
-
-### Evaluator 评估
-<独立评估结果摘要>
+## Status
+ready
 ```
 
-### LESSONS_LEARNED 格式
+说明：
 
-```markdown
-## 经验教训
+- `Constraints` 可以为空，但如果语言、平台、依赖限制、禁止修改路径等是关键约束，必须写清楚
+- `Status` 必须为 `ready`
+- 任务文档目标是让 runtime 无需再猜“到底要做什么”
 
-### 重试原因分析
-| 任务 | 重试次数 | 根因 | 建议新增的约束 |
-|------|---------|------|---------------|
+### Step 3: 入队
 
-### 模式错误
-<反复出现的问题模式，建议编码为 lint 规则>
-
-### 改进建议
-<对 harness 约束或 auto-dev 流程的改进建议>
-```
-
----
-
-## 目录结构
-
-```
-.auto-dev/
-├── reports/          ← 任务和项目报告
-├── state/            ← TASK_STATE.md（持久化）
-└── logs/             ← 构建和测试日志
-```
-
-## 协议文件索引
-
-| 文件 | 何时加载 | 内容 |
-|------|---------|------|
-| `protocols/scheduler.md` | S4-S6 事件循环 | 调度规则、并发安全、context budget |
-| `protocols/task-agent.md` | 启动 sub-agent | prompt 模板、闭环控制、模型路由 |
-| `protocols/recovery.md` | 断点恢复、故障处理 | 恢复策略、故障表、S_HALT 格式 |
-
-## Runtime Queue Hand-off
-
-Use `--enqueue` after requirement discussion is complete and the task document is ready for execution.
-
-Expected document contract:
-
-- markdown task document
-- includes `Goal`
-- includes `Inputs`
-- includes `Outputs`
-- includes `Acceptance Criteria`
-- includes `Status`
-- `Status` must be `ready`
-
-Recommended hand-off command:
+任务文档准备完成后，委托给 `harness-runtime`：
 
 ```bash
-python harness-runtime/main.py --add-file docs/tasks/task-001.md
+python harness-runtime/main.py --add-file <task-doc-path>
 ```
 
-The runtime queue keeps the original document path as source metadata for later status lookup and audit.
+## 语言策略
+
+`auto-dev` 是 language-agnostic skill。
+
+规则：
+
+- 用户明确指定语言：写入 `Constraints`
+- 用户没有指定语言但语言会影响执行：追问
+- 用户没有指定语言且暂时不影响任务定义：可不填
+
+`harness-cpp` 只是当前已经落地的一个 harness 示例，不是 `auto-dev` 的永久前置依赖。
+
+长期模型是：
+
+- `auto-dev`：语言无关的任务入口
+- harness：语言或技术栈特化约束
+- runtime：按任务元数据选择对应执行约束
+
+## 状态边界
+
+`auto-dev` 可以知道：
+
+- 当前是否已经整理出任务文档
+- 任务文档路径
+- 入队是否成功
+
+`auto-dev` 不维护：
+
+- `running`
+- `failed`
+- `retry_count`
+- `phase`
+- `duration_s`
+
+这些状态由 runtime 维护。
+
+## 与 runtime 的关系
+
+`auto-dev` 和 `harness-runtime` 的职责分工：
+
+- `auto-dev`：需求澄清、任务成型、入队
+- `harness-runtime`：校验、排队、执行、重试、状态记录
+
+一旦任务已经入队，执行态真相源只能是 runtime。
+
+如果后续需要进度查询，应读取 runtime 状态，而不是在 skill 内维护另一套状态。
+
+## 输出要求
+
+当你使用本 skill 时：
+
+1. 如果需求不清晰，先提出必要问题
+2. 如果需求足够清晰，整理成规范任务文档
+3. 明确告知用户将通过 `--add-file` 入队
+4. 不把自己描述成执行闭环调度器
+
+## 禁止事项
+
+不要在本 skill 中：
+
+- 假装自己已经执行了任务
+- 生成运行态状态机设计并把自己当成 worker
+- 维护独立于 runtime 的任务生命周期记录
+- 把 C++ harness 约束硬编码成 skill 的固定流程
