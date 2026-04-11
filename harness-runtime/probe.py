@@ -1,5 +1,15 @@
 """Quick probe: ask each phase provider '你是谁？' and print the reply."""
 
+import sys
+
+
+def _configure_utf8_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
+
 import config
 from langchain_core.messages import HumanMessage
 
@@ -23,6 +33,7 @@ def probe(phase: str, label: str) -> None:
         print(f"[ERROR] {e}")
 
 if __name__ == "__main__":
+    _configure_utf8_stdio()
     for phase, label in PHASES:
         probe(phase, label)
     print(f"\n{'─'*50}")

@@ -13,6 +13,14 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore", category=Warning, module="requests")
 
+
+def _configure_utf8_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
+
 import config
 from drain import run_drain_with_hooks
 from interactive import choose_interactive_task, run_single_task_with_hooks
@@ -30,6 +38,7 @@ from queue_cli import (
     show_status_json as queue_show_status_json,
 )
 from runtime_support import print_banner
+from task_doc import TaskDocValidationError, validate_task_doc as runtime_validate_task_doc
 from task_queue import load_queue
 
 _QUEUE_FILE = Path(__file__).parent / "task_queue.json"
@@ -57,6 +66,13 @@ def handle_add(description: str, max_retries: int = 3) -> str:
 
 def handle_add_file(doc_path: str, max_retries: int = 3) -> str:
     return queue_handle_add_file(doc_path, max_retries, _QUEUE_FILE, _STATUS_FILE)
+
+
+def handle_validate_task_doc(doc_path: str) -> None:
+    resolved_path, sections, constraints = runtime_validate_task_doc(doc_path)
+    print(f"[HARNESS] Task document is valid: {resolved_path}")
+    print(f"  Required sections: {', '.join(name for name in sections if sections.get(name))}")
+    print(f"  Constraints: {len(constraints)} parsed")
 
 
 def handle_cancel(task_id: str) -> None:
@@ -125,6 +141,7 @@ def main() -> None:
     parser.add_argument("--list", action="store_true", help="List all saved tasks")
     parser.add_argument("--add", metavar="DESC", help="Add a task to the queue")
     parser.add_argument("--add-file", metavar="PATH", help="Add a ready task document to the queue")
+    parser.add_argument("--validate-task-doc", metavar="PATH", help="Validate a task document without enqueueing")
     parser.add_argument("--cancel", metavar="ID", help="Cancel a pending queued task")
     parser.add_argument("--skip", metavar="ID", help="Skip a pending queued task")
     parser.add_argument("--queue", action="store_true", help="List queued tasks")
@@ -147,10 +164,17 @@ def main() -> None:
         max_retries = int(config.get_setting("MAX_RETRIES", "3"))
         handle_add(args.add, max_retries=max_retries)
         return
-    if args.add_file:
-        max_retries = int(config.get_setting("MAX_RETRIES", "3"))
-        handle_add_file(args.add_file, max_retries=max_retries)
-        return
+    try:
+        if args.add_file:
+            max_retries = int(config.get_setting("MAX_RETRIES", "3"))
+            handle_add_file(args.add_file, max_retries=max_retries)
+            return
+        if args.validate_task_doc:
+            handle_validate_task_doc(args.validate_task_doc)
+            return
+    except TaskDocValidationError as exc:
+        print(f"[ERROR] {exc}")
+        sys.exit(1)
     if args.cancel:
         handle_cancel(args.cancel)
         return
@@ -195,4 +219,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    _configure_utf8_stdio()
     main()

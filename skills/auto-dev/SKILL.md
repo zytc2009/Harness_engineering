@@ -134,6 +134,7 @@ python harness-runtime/main.py --add-file <task-doc-path>
 - 当前是否已经整理出任务文档
 - 任务文档路径
 - 入队是否成功
+- 如需查询进度，应读取 runtime 的机器可读状态输出
 
 `auto-dev` 不维护：
 
@@ -156,6 +157,19 @@ python harness-runtime/main.py --add-file <task-doc-path>
 
 如果后续需要进度查询，应读取 runtime 状态，而不是在 skill 内维护另一套状态。
 
+推荐读取方式：
+
+```bash
+python harness-runtime/main.py --status-json
+python harness-runtime/main.py --queue-json
+```
+
+规则：
+
+- 优先使用 JSON 输出给上层自动化消费
+- 不要解析面向人类的终端格式输出作为状态真相源
+- 如果需要回答“当前在做什么”或“队列里还有什么”，先读 runtime JSON 再总结给用户
+
 ## 输出要求
 
 当你使用本 skill 时：
@@ -163,7 +177,8 @@ python harness-runtime/main.py --add-file <task-doc-path>
 1. 如果需求不清晰，先提出必要问题
 2. 如果需求足够清晰，整理成规范任务文档
 3. 明确告知用户将通过 `--add-file` 入队
-4. 不把自己描述成执行闭环调度器
+4. 如需查询执行进度，使用 `--status-json` / `--queue-json`
+5. 不把自己描述成执行闭环调度器
 
 ## 禁止事项
 
@@ -172,4 +187,5 @@ python harness-runtime/main.py --add-file <task-doc-path>
 - 假装自己已经执行了任务
 - 生成运行态状态机设计并把自己当成 worker
 - 维护独立于 runtime 的任务生命周期记录
+- 依赖手工维护的 markdown 状态模板作为运行态真相源
 - 把 C++ harness 约束硬编码成 skill 的固定流程

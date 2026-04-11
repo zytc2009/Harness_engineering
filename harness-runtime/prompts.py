@@ -9,6 +9,7 @@ The LLM is expected to produce structured output that the harness parses and wri
 
 from pathlib import Path
 
+from harness_registry import load_harness_context, load_harness_role_context
 from memory import format_memories_for_prompt, load_memories
 
 PHASES = ("architect", "implementer", "tester")
@@ -120,50 +121,11 @@ _PHASE_PROMPTS = {
 }
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_HARNESS_CONTEXT_FILES: dict[str, tuple[str, ...]] = {
-    "harness-cpp": ("HARNESS.md", "TASK_PROTOCOL.md"),
-}
-_HARNESS_ROLE_FILES: dict[str, dict[str, str]] = {
-    "harness-cpp": {
-        "architect": "roles/architect.md",
-        "implementer": "roles/implementer.md",
-        "tester": "roles/test-engineer.md",
-    }
-}
 
 
 def get_prompt_for_phase(phase: str) -> str:
     """Return the role-specific prompt body for a phase."""
     return _PHASE_PROMPTS[phase]
-
-
-def _load_harness_context(harness_name: str) -> str:
-    files = _HARNESS_CONTEXT_FILES.get(harness_name, ())
-    if not files:
-        return ""
-    harness_dir = _REPO_ROOT / harness_name
-    parts = []
-    for relative_name in files:
-        path = harness_dir / relative_name
-        if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8").strip()
-        if text:
-            parts.append(f"## {harness_name}/{relative_name}\n{text}")
-    return "\n\n".join(parts)
-
-
-def _load_role_context(harness_name: str, phase: str) -> str:
-    role_file = _HARNESS_ROLE_FILES.get(harness_name, {}).get(phase)
-    if not role_file:
-        return ""
-    path = _REPO_ROOT / harness_name / role_file
-    if not path.exists():
-        return ""
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return ""
-    return f"## {harness_name}/{role_file}\n{text}"
 
 
 def get_system_prompt(phase: str, task_metadata: dict | None = None) -> str:
@@ -180,10 +142,10 @@ def get_system_prompt(phase: str, task_metadata: dict | None = None) -> str:
         parts.append("## Task Constraints\n" + "\n".join(constraint_lines))
 
     harness_name = constraints.get("harness", "").strip()
-    harness_context = _load_harness_context(harness_name) if harness_name else ""
+    harness_context = load_harness_context(harness_name) if harness_name else ""
     if harness_context:
         parts.append("## Harness Context\n" + harness_context)
-    role_context = _load_role_context(harness_name, phase) if harness_name else ""
+    role_context = load_harness_role_context(harness_name, phase) if harness_name else ""
     if role_context:
         parts.append("## Harness Role Context\n" + role_context)
 

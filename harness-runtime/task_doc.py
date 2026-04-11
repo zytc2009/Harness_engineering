@@ -8,6 +8,10 @@ from pathlib import Path
 DOC_REQUIRED_SECTIONS = ("goal", "inputs", "outputs", "acceptance criteria", "status")
 
 
+class TaskDocValidationError(ValueError):
+    """Raised when a task document fails validation."""
+
+
 def parse_task_doc_sections(text: str) -> dict[str, str]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
@@ -69,18 +73,38 @@ def parse_constraints(section_text: str) -> dict[str, str]:
     return constraints
 
 
-def load_task_doc(doc_path: str | Path) -> tuple[Path, str, dict[str, str]]:
+def validate_task_doc(doc_path: str | Path) -> tuple[Path, dict[str, str], dict[str, str]]:
     path = Path(doc_path).resolve()
     if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Task document not found: {path}")
+        raise TaskDocValidationError(f"Task document not found: {path}")
     text = path.read_text(encoding="utf-8").strip()
     if not text:
-        raise ValueError(f"Task document is empty: {path}")
+        raise TaskDocValidationError(f"Task document is empty: {path}")
     sections = parse_task_doc_sections(text)
     missing = [name for name in DOC_REQUIRED_SECTIONS if not sections.get(name)]
     if missing:
-        raise ValueError(f"Task document missing required sections: {', '.join(missing)}")
+        raise TaskDocValidationError(f"Task document missing required sections: {', '.join(missing)}")
     if sections["status"].strip().lower() != "ready":
-        raise ValueError(f"Task document is not ready for enqueue: {path}")
+        raise TaskDocValidationError(
+            f"Task document is not ready for enqueue (status '{sections['status'].strip()}'): {path}"
+        )
+    invalid_constraint_lines: list[str] = []
+    for raw_line in sections.get("constraints", "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        candidate = line[1:].strip() if line.startswith(("-", "*")) else line
+        key, sep, value = candidate.partition(":")
+        if not sep or not key.strip() or not value.strip():
+            invalid_constraint_lines.append(line)
+    if invalid_constraint_lines:
+        raise TaskDocValidationError(
+            "Task document has invalid constraint lines: " + "; ".join(invalid_constraint_lines)
+        )
     constraints = parse_constraints(sections.get("constraints", ""))
+    return path, sections, constraints
+
+
+def load_task_doc(doc_path: str | Path) -> tuple[Path, str, dict[str, str]]:
+    path, sections, constraints = validate_task_doc(doc_path)
     return path, render_doc_task_description(sections), constraints

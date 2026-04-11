@@ -135,6 +135,70 @@ class TestHandleAdd:
         assert load_queue(queue_path) == []
         assert read_status(status_path) is None
 
+    def test_handle_validate_task_doc_prints_success_summary(self, tmp_path, capsys):
+        doc_path = tmp_path / "task.md"
+        doc_path.write_text(
+            "\n".join([
+                "# Task",
+                "## Goal",
+                "Build a calculator",
+                "## Inputs",
+                "stdin expressions",
+                "## Outputs",
+                "stdout results",
+                "## Acceptance Criteria",
+                "All provided samples pass",
+                "## Constraints",
+                "- language: python",
+                "- platform: windows",
+                "## Status",
+                "ready",
+            ]),
+            encoding="utf-8",
+        )
+
+        from main import handle_validate_task_doc
+
+        handle_validate_task_doc(str(doc_path))
+
+        output = capsys.readouterr().out
+        assert "Task document is valid" in output
+        assert "Constraints: 2 parsed" in output
+
+    def test_main_validate_task_doc_exits_cleanly_on_invalid_constraints(self, tmp_path, capsys):
+        doc_path = tmp_path / "task.md"
+        doc_path.write_text(
+            "\n".join([
+                "# Task",
+                "## Goal",
+                "Build a calculator",
+                "## Inputs",
+                "stdin expressions",
+                "## Outputs",
+                "stdout results",
+                "## Acceptance Criteria",
+                "All provided samples pass",
+                "## Constraints",
+                "- language python",
+                "## Status",
+                "ready",
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch.object(sys, "argv", ["main.py", "--validate-task-doc", str(doc_path)]):
+            from main import main
+
+            try:
+                main()
+                raise AssertionError("expected SystemExit")
+            except SystemExit as exc:
+                assert exc.code == 1
+
+        output = capsys.readouterr().out
+        assert "[ERROR]" in output
+        assert "invalid constraint lines" in output
+
 
 class TestQueueControls:
     def test_handle_cancel_marks_task_cancelled(self, tmp_path):

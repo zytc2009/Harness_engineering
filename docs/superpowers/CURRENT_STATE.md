@@ -23,9 +23,15 @@ Date: 2026-04-11
   - `python harness-runtime/main.py --queue-json`
 - runtime prompt injection now supports:
   - task `Constraints`
-  - `harness-cpp/HARNESS.md`
-  - `harness-cpp/TASK_PROTOCOL.md`
+  - harness registry / loader via `constraints.harness`
+  - standard harness context files:
+    - `HARNESS.md`
+    - `TASK_PROTOCOL.md`
   - phase-specific role docs for architect / implementer / tester
+- harness filesystem contract is documented in:
+  - `docs/superpowers/harness-contract.md`
+- benchmark run notes now exist in:
+  - `docs/superpowers/benchmark-results-2026-04-11.md`
 
 ## Recent Commits
 
@@ -40,7 +46,9 @@ Date: 2026-04-11
 
 - `skills/auto-dev/SKILL.md`
 - `docs/superpowers/plans/2026-04-11-skill-runtime-boundary.md`
+- `docs/superpowers/harness-contract.md`
 - `docs/tasks/task-template.md`
+- `harness-runtime/harness_registry.py`
 - `harness-runtime/main.py`
 - `harness-runtime/task_doc.py`
 - `harness-runtime/queue_cli.py`
@@ -52,33 +60,34 @@ Date: 2026-04-11
 ## Validation Status
 
 - `pytest -q harness-runtime/tests`
-- latest known result: `152 passed`
+- latest known result: `160 passed`
 
 ## Highest-Priority Next Tasks
 
 1. Add task document validation as a first-class command
-   - candidate CLI: `python harness-runtime/main.py --validate-task-doc <path>`
-   - return clear section/constraint errors
+   - done: `python harness-runtime/main.py --validate-task-doc <path>`
+   - returns clear section/constraint errors
 
 2. Strengthen task document structure
-   - decide whether to keep markdown-only
-   - or add stricter structured metadata rules for `Constraints`
+   - decision: keep markdown-based task docs
+   - continue tightening `Constraints` parsing/validation without introducing a separate manifest format
 
 3. Generalize harness selection
-   - current concrete harness support is only `harness-cpp`
-   - next step is a real harness registry / loader model
+   - done: runtime now uses a registry / loader model based on `constraints.harness`
+   - next step is deciding whether/when to add an explicit harness manifest
 
 4. Add non-human status consumption paths to skill integration
-   - wire `auto-dev` to use `--status-json` / `--queue-json`
-   - avoid parsing terminal-formatted output
+   - done: `auto-dev` guidance now points progress reads to `--status-json` / `--queue-json`
+   - skill guidance now rejects markdown task-state files as runtime truth sources
 
 5. Clean up top-level README language and stale framing
    - reduce old wording that still describes earlier architecture
    - fix remaining usability/documentation rough edges
 
 6. Add realistic benchmark tasks
-   - verify task success rate beyond unit tests
-   - measure queue/task-doc/runtime behavior on real repo tasks
+   - done: benchmark task docs added under `docs/tasks/benchmarks/`
+   - done: validate/add/drain trial executed on 2026-04-11
+   - current blocker: external provider connectivity caused architect-phase `Connection error.` failures for all 3 tasks
 
 ## Resume Rule
 

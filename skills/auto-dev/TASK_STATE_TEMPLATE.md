@@ -1,40 +1,27 @@
-## 任务目标
-{{ONE_LINE_GOAL}}
+# Deprecated
 
-## 需求摘要
-- 功能：{{FEATURE_DESCRIPTION}}
-- 涉及模块：{{MODULES}}
-- 目标平台：{{PLATFORMS}}
-- 验收标准：{{ACCEPTANCE_CRITERIA}}
+此文件不再作为 `auto-dev` 的运行态状态模板。
 
-## 已完成
-（空）
+原因：
 
-## 进行中
-- [ ] Phase 1：架构设计
+- 执行状态由 `harness-runtime` 统一维护
+- `task_queue.json` 是任务生命周期真相源
+- `status.json` 是 worker 快照
+- `auto-dev` 不应维护独立的 `进行中 / 待完成 / 重试计数 / 错误历史`
 
-## 待完成
-- [ ] Phase 2：实现
-- [ ] Phase 3：测试
-- [ ] Phase 4：审查
-- [ ] Phase 5：收尾
+如需查询状态，请读取 runtime 的机器可读输出：
 
-## 关键上下文
-- 需求文档：{{REQUIREMENT_PATH}}
-- Harness 路径：{{HARNESS_PATH}}
-- 设计文档：（Phase 1 完成后填写）
+```bash
+python harness-runtime/main.py --status-json
+python harness-runtime/main.py --queue-json
+```
 
-## 重试计数
-0 / 3
+如需提交任务，请使用规范任务文档并入队：
 
-## 错误历史
-（每轮重试的错误记录，用于追踪问题收敛情况）
+```bash
+python harness-runtime/main.py --add-file <task-doc-path>
+```
 
-### 第 1 轮
-（待填写）
+任务文档模板见：
 
-### 第 2 轮
-（待填写）
-
-### 第 3 轮
-（待填写）
+- `docs/tasks/task-template.md`
