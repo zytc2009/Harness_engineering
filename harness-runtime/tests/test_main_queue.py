@@ -1,7 +1,6 @@
 """Tests for queue/drain behavior in main.py."""
 
 import sys
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -60,10 +59,48 @@ class TestHandleAdd:
         assert queue[0]["status"] == "pending"
         assert queue[0]["source_doc"] == str(doc_path.resolve())
         assert queue[0]["source_type"] == "task_doc"
+        assert queue[0]["constraints"] == {}
         assert "[Goal] Build a calculator" in queue[0]["description"]
         status = read_status(status_path)
         assert status["queue_pending"] == 1
         assert status["last_event_type"] == "task_queued"
+
+    def test_handle_add_file_parses_constraints_metadata(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        doc_path = tmp_path / "task.md"
+        doc_path.write_text(
+            "\n".join([
+                "# Task",
+                "## Goal",
+                "Build a calculator",
+                "## Inputs",
+                "stdin expressions",
+                "## Outputs",
+                "stdout results",
+                "## Acceptance Criteria",
+                "All provided samples pass",
+                "## Constraints",
+                "- language: cpp",
+                "- harness: harness-cpp",
+                "- platform: windows",
+                "## Status",
+                "ready",
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
+            from main import handle_add_file
+
+            handle_add_file(str(doc_path), max_retries=2)
+
+        queue = load_queue(queue_path)
+        assert queue[0]["constraints"] == {
+            "language": "cpp",
+            "harness": "harness-cpp",
+            "platform": "windows",
+        }
 
     def test_handle_add_file_rejects_non_ready_doc(self, tmp_path):
         queue_path = tmp_path / "q.json"
@@ -162,7 +199,6 @@ class TestRunDrain:
     def test_run_drain_uses_per_task_max_retries(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("task A", queue_path, max_retries=1)
@@ -176,7 +212,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -195,7 +230,6 @@ class TestRunDrain:
     def test_run_drain_processes_two_successful_tasks(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("task A", queue_path)
@@ -204,7 +238,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -225,10 +258,9 @@ class TestRunDrain:
         assert status["last_task_id"] == queue[1]["id"]
         assert status["last_task_description"] == "task B"
 
-    def test_run_drain_preserves_source_doc_in_history(self, tmp_path):
+    def test_run_drain_preserves_source_doc_in_queue_record(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         doc_path = tmp_path / "task.md"
@@ -256,7 +288,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -267,15 +298,14 @@ class TestRunDrain:
 
             run_drain(max_retries=2)
 
-        tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
-        task = next(item for item in tasks if item["id"] == task_id)
+        queue = load_queue(queue_path)
+        task = next(item for item in queue if item["id"] == task_id)
         assert task["source_doc"] == str(doc_path.resolve())
         assert task["source_type"] == "task_doc"
 
     def test_run_drain_continues_after_failure(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("will fail", queue_path)
@@ -288,7 +318,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -306,7 +335,6 @@ class TestRunDrain:
     def test_run_drain_records_unexpected_exception_in_status(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         task_id = add_task("boom", queue_path)
@@ -314,7 +342,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -335,7 +362,6 @@ class TestRunDrain:
     def test_run_drain_repairs_stale_running_tasks_before_processing(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         stale_id = add_task("stale", queue_path)
@@ -348,7 +374,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -364,10 +389,9 @@ class TestRunDrain:
         assert queue[0]["error"] == "worker_interrupted"
         assert queue[1]["status"] == "done"
 
-    def test_run_drain_repairs_stale_running_history_before_processing(self, tmp_path):
+    def test_run_drain_repairs_stale_running_queue_record_before_processing(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         stale_id = add_task("stale", queue_path)
@@ -376,18 +400,10 @@ class TestRunDrain:
         from task_queue import update_task
 
         update_task(stale_id, queue_path=queue_path, status="running")
-        tasks_path.write_text(json.dumps([{
-            "id": stale_id,
-            "description": "stale",
-            "status": "running",
-            "created": "2026-04-10 10:00:00",
-            "updated": "2026-04-10 10:00:00",
-        }], ensure_ascii=False, indent=2), encoding="utf-8")
 
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -398,7 +414,7 @@ class TestRunDrain:
 
             run_drain(max_retries=2)
 
-        tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+        tasks = load_queue(queue_path)
         stale = next(task for task in tasks if task["id"] == stale_id)
         assert stale["status"] == "failed"
         assert stale["phase"] == "interrupted"
@@ -407,7 +423,6 @@ class TestRunDrain:
     def test_keyboard_interrupt_stops_drain_and_leaves_remaining_pending(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("interrupt me", queue_path)
@@ -416,7 +431,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -438,7 +452,6 @@ class TestRunDrain:
     def test_drain_ignores_cancelled_and_skipped_tasks(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         first = add_task("cancelled", queue_path)
@@ -459,7 +472,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -480,7 +492,6 @@ class TestRunDrain:
     def test_status_tracks_retry_message(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("retry me", queue_path)
@@ -498,7 +509,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -516,7 +526,6 @@ class TestRunDrain:
     def test_status_records_last_finished_time(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("finish me", queue_path)
@@ -524,7 +533,6 @@ class TestRunDrain:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -544,12 +552,12 @@ class TestRunDrain:
 class TestInteractiveStatus:
     def test_single_task_updates_status_snapshot(self, tmp_path):
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
+        queue_path = tmp_path / "q.json"
         sandbox_root = tmp_path / "sandbox"
 
         with (
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
+            patch("main._QUEUE_FILE", queue_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.print_banner"),
             patch("main.extract_and_save_memory"),
@@ -567,12 +575,12 @@ class TestInteractiveStatus:
 
     def test_architect_failure_updates_status_and_history(self, tmp_path):
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
+        queue_path = tmp_path / "q.json"
         sandbox_root = tmp_path / "sandbox"
 
         with (
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
+            patch("main._QUEUE_FILE", queue_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.print_banner"),
             patch("main.architect_phase", side_effect=RuntimeError("architect boom")),
@@ -589,7 +597,7 @@ class TestInteractiveStatus:
         assert status["last_event_type"] == "pipeline_failed"
         assert status["error"] == "architect boom"
 
-        tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+        tasks = load_queue(queue_path)
         task = next(item for item in tasks if item["id"] == "task-2")
         assert task["status"] == "failed"
         assert task["error"] == "architect boom"

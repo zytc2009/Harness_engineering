@@ -19,6 +19,7 @@ from task_queue import (
     queue_counts,
     save_queue,
     skip_task,
+    upsert_task,
     update_task,
 )
 
@@ -66,6 +67,7 @@ class TestAddTask:
         assert queue[0]["max_retries"] == 3
         assert queue[0]["source_doc"] is None
         assert queue[0]["source_type"] is None
+        assert queue[0]["constraints"] is None
 
     def test_adds_task_with_source_doc_metadata(self, tmp_path):
         path = tmp_path / "q.json"
@@ -79,6 +81,7 @@ class TestAddTask:
         assert queue[0]["id"] == task_id
         assert queue[0]["source_doc"] == "docs/tasks/calc.md"
         assert queue[0]["source_type"] == "task_doc"
+        assert queue[0]["constraints"] is None
 
     def test_appends_to_existing_queue_in_fifo_order(self, tmp_path):
         path = tmp_path / "q.json"
@@ -86,6 +89,51 @@ class TestAddTask:
         add_task("task 2", path)
         queue = load_queue(path)
         assert [task["description"] for task in queue] == ["task 1", "task 2"]
+
+    def test_upsert_task_inserts_new_record(self, tmp_path):
+        path = tmp_path / "q.json"
+
+        upsert_task({
+            "id": "task-1",
+            "description": "interactive task",
+            "status": "running",
+            "phase": "implementer",
+            "retry_count": 0,
+            "max_retries": 3,
+            "error": None,
+            "created": "2026-04-11 10:00:00",
+            "updated": "2026-04-11 10:00:00",
+            "started_at": "2026-04-11 10:00:00",
+            "finished_at": None,
+            "duration_s": None,
+            "source_doc": None,
+            "source_type": None,
+        }, path)
+
+        queue = load_queue(path)
+        assert len(queue) == 1
+        assert queue[0]["id"] == "task-1"
+        assert queue[0]["status"] == "running"
+
+    def test_upsert_task_replaces_existing_record(self, tmp_path):
+        path = tmp_path / "q.json"
+        task_id = add_task("task 1", path)
+        original = load_queue(path)[0]
+
+        upsert_task({
+            **original,
+            "id": task_id,
+            "status": "done",
+            "phase": "done",
+            "duration_s": 3.2,
+        }, path)
+
+        updated = load_queue(path)
+        assert len(updated) == 1
+        assert updated[0]["id"] == task_id
+        assert updated[0]["status"] == "done"
+        assert updated[0]["phase"] == "done"
+        assert updated[0]["duration_s"] == 3.2
 
 
 class TestSelectorsAndCounts:

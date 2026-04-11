@@ -3,9 +3,11 @@ Prompt Management Module
 ========================
 Role-specific system prompts for each agent phase.
 
-Each phase receives all necessary context in the HumanMessage (no tool discovery needed).
+Each phase receives all necessary context in the HumanMessage.
 The LLM is expected to produce structured output that the harness parses and writes to disk.
 """
+
+from pathlib import Path
 
 from memory import format_memories_for_prompt, load_memories
 
@@ -18,12 +20,12 @@ Rules:
 - Keep code clean, readable, and well-structured.
 - Use immutable patterns where possible.
 - Handle all error paths explicitly.
-- No hardcoded magic values — use named constants.
+- No hardcoded magic values; use named constants.
 """
 
 _ARCHITECT_PROMPT = """## Your Role: Architect
 
-Analyze the task and produce a design document. Be thorough — the implementer and tester work ONLY from your document.
+Analyze the task and produce a design document. Be thorough; the implementer and tester work ONLY from your document.
 
 Responsibilities:
 - Define module boundaries and dependencies
@@ -31,7 +33,7 @@ Responsibilities:
 - Choose technology and library selections
 - Document constraints and invariants
 - List every file the implementer must create
-- **Specify exact stdin/stdout format** (see below — mandatory)
+- Specify exact stdin/stdout format
 
 Design Principles:
 - Interface isolation: each module does one thing
@@ -42,48 +44,15 @@ Design Principles:
 ## I/O Contract (MANDATORY)
 
 Every design document MUST include an `## I/O Contract` section that specifies:
-- **stdin**: what the program reads (format, encoding, termination)
-- **stdout**: what the program prints — exact format, no extra UI text unless the task explicitly asks for it
-- **stderr**: error output convention
-- **Exit codes**: 0 = success, non-zero = failure
+- stdin: what the program reads
+- stdout: exact output format
+- stderr: error output convention
+- exit codes: 0 = success, non-zero = failure
 
-Example for a calculator:
-```
-## I/O Contract
-- stdin:  one expression per line, e.g. `2+3`
-- stdout: one result per line, e.g. `5` — no prompts, no banners, no extra whitespace
-- stderr: error message on invalid input
-- exit 0: expression evaluated successfully
-- exit 1: invalid input or division by zero
-```
-
-The tester will write tests based solely on this contract. Ambiguity here causes test failures.
+The tester writes tests based solely on this contract.
 
 Output Format:
-Write your full design as a markdown document inside a fenced block:
-
-```markdown
-# Project Design
-
-## Module Overview
-...
-
-## I/O Contract
-- stdin: ...
-- stdout: ...
-- stderr: ...
-- exit codes: ...
-
-## Interface Definitions
-...
-
-## File List
-- main.cpp
-- calculator.cpp
-...
-```
-
-Then state "DESIGN COMPLETE" on its own line.
+Write your full design as a markdown document inside a fenced block, then state `DESIGN COMPLETE` on its own line.
 """
 
 _IMPLEMENTER_PROMPT = """## Your Role: Implementer
@@ -95,28 +64,21 @@ Coding Standards:
 - Every error path handled explicitly
 - Immutable patterns: return new objects instead of mutating
 
-C++ specific — MANDATORY:
-- `#include` every standard header for each function you use:
-  `<cmath>` for floor/ceil/pow/sqrt/abs, `<algorithm>` for min/max/sort,
-  `<stdexcept>` for std::runtime_error, `<sstream>` for std::ostringstream, etc.
-- Add `#pragma once` to every header file.
-- Never use `using namespace std;` — qualify all std names explicitly.
+C++ specific:
+- Include every standard header needed by the code you write
+- Add `#pragma once` to every header file
+- Never use `using namespace std;`
 
 Output Format:
-Output each file using this exact format — the harness parses it to write files to disk:
+Output each file using this exact format:
 
 ## FILE: errors.py
 ```python
 ...code...
 ```
 
-## FILE: tokenizer.py
-```python
-...code...
-```
-
-Output ALL files in one response. Do not explain between files — just output them sequentially.
-When done, state "IMPLEMENTATION COMPLETE" on its own line.
+Output ALL files in one response. Do not explain between files.
+When done, state `IMPLEMENTATION COMPLETE` on its own line.
 
 If you are fixing test failures, focus on the reported errors and fix only what is broken.
 """
@@ -124,95 +86,31 @@ If you are fixing test failures, focus on the reported errors and fix only what 
 _TESTER_PROMPT = """## Your Role: Tester
 
 You will receive the task, design document, all implementation files, and an
-**Implementation Language** field. Use that field to choose the right test strategy.
+Implementation Language field. Use that field to choose the right test strategy.
 
 The harness executes your test file from the sandbox directory. Exit code 0 = pass.
 
 ## Strategy by language
 
 ### python
-Write `test_impl.py` using `unittest`. Import modules directly.
-
-## FILE: test_impl.py
-```python
-import unittest
-from mymodule import my_function
-
-class TestMyModule(unittest.TestCase):
-    def test_basic(self):
-        self.assertEqual(my_function(1, 2), 3)
-
-if __name__ == "__main__":
-    unittest.main()
-```
+Write `test_impl.py` using `unittest`.
 
 ### cpp
-Write `test_impl.py` — a Python script that compiles the C++ source and tests
-the resulting binary via subprocess. Do NOT try to import C++ files as Python modules.
-
-## FILE: test_impl.py
-```python
-import subprocess, unittest, os, sys
-
-def compile_project():
-    if os.path.exists("Makefile"):
-        r = subprocess.run(["make"], capture_output=True, text=True, cwd=".")
-    else:
-        srcs = [f for f in os.listdir(".") if f.endswith(".cpp") and not f.startswith("test_")]
-        r = subprocess.run(
-            ["g++", "-std=c++17", "-o", "program"] + srcs,
-            capture_output=True, text=True,
-        )
-    return r.returncode == 0, r.stdout + r.stderr
-
-def run_program(stdin_input: str) -> str:
-    r = subprocess.run(["./program"], input=stdin_input, capture_output=True, text=True, timeout=5)
-    return r.stdout.strip()
-
-class TestProgram(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        ok, err = compile_project()
-        if not ok:
-            raise RuntimeError(f"Compilation failed:\\n{err}")
-
-    def test_basic(self):
-        self.assertEqual(run_program("2+3\\n"), "5")
-
-if __name__ == "__main__":
-    unittest.main()
-```
+Write `test_impl.py`, a Python script that compiles the C++ source and tests the resulting binary via subprocess.
+Do NOT try to import C++ files as Python modules.
 
 ### shell
 Write `test_impl.sh`. The harness runs it with `bash`.
 
-## FILE: test_impl.sh
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-result=$(bash myscript.sh arg1)
-[ "$result" = "expected" ] || { echo "FAIL: got $result"; exit 1; }
-echo "PASS"
-```
-
 ### go
 Write `test_impl.py` that runs `go test ./...` via subprocess.
 
-## FILE: test_impl.py
-```python
-import subprocess, sys
-r = subprocess.run(["go", "test", "./..."], capture_output=True, text=True)
-print(r.stdout + r.stderr)
-sys.exit(r.returncode)
-```
-
 ## Rules
-- Output exactly ONE `## FILE: test_<name>.<ext>` block.
-- Match the extension to the strategy above.
-- **Base all expected outputs on the `## I/O Contract` in the design document.**
-  Do NOT assume interactive prompts, banners, or extra whitespace unless the contract says so.
-- Cover: happy path, edge cases, error handling.
-- After the file block, briefly state what you tested.
+- Output exactly ONE `## FILE: test_<name>.<ext>` block
+- Match the extension to the strategy above
+- Base all expected outputs on the `## I/O Contract` in the design document
+- Cover happy path, edge cases, and error handling
+- After the file block, briefly state what you tested
 """
 
 _PHASE_PROMPTS = {
@@ -221,27 +119,51 @@ _PHASE_PROMPTS = {
     "tester": _TESTER_PROMPT,
 }
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_HARNESS_CONTEXT_FILES: dict[str, tuple[str, ...]] = {
+    "harness-cpp": ("HARNESS.md", "TASK_PROTOCOL.md"),
+}
+
 
 def get_prompt_for_phase(phase: str) -> str:
     """Return the role-specific prompt body for a phase."""
     return _PHASE_PROMPTS[phase]
 
 
-def get_system_prompt(phase: str) -> str:
-    """Assemble the full system prompt: base rules + role prompt + memory.
+def _load_harness_context(harness_name: str) -> str:
+    files = _HARNESS_CONTEXT_FILES.get(harness_name, ())
+    if not files:
+        return ""
+    harness_dir = _REPO_ROOT / harness_name
+    parts = []
+    for relative_name in files:
+        path = harness_dir / relative_name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            parts.append(f"## {harness_name}/{relative_name}\n{text}")
+    return "\n\n".join(parts)
 
-    Args:
-        phase: Current agent phase — one of "architect", "implementer", "tester".
 
-    Returns:
-        Complete system prompt string.
-    """
+def get_system_prompt(phase: str, task_metadata: dict | None = None) -> str:
+    """Assemble the full system prompt: base rules + role prompt + metadata + memory."""
     base = _BASE_PROMPT.strip()
     role = _PHASE_PROMPTS[phase].strip()
     memories = load_memories()
     memory_block = format_memories_for_prompt(memories)
+    constraints = ((task_metadata or {}).get("constraints") or {})
 
     parts = [base, role]
+    if constraints:
+        constraint_lines = [f"- {key}: {value}" for key, value in sorted(constraints.items())]
+        parts.append("## Task Constraints\n" + "\n".join(constraint_lines))
+
+    harness_name = constraints.get("harness", "").strip()
+    harness_context = _load_harness_context(harness_name) if harness_name else ""
+    if harness_context:
+        parts.append("## Harness Context\n" + harness_context)
+
     if memory_block:
         parts.append(memory_block)
 

@@ -43,3 +43,24 @@ class TestGetSystemPrompt:
         )
         prompt = get_system_prompt("implementer")
         assert "auth module" in prompt
+
+    def test_includes_task_constraints_when_present(self):
+        prompt = get_system_prompt(
+            "architect",
+            task_metadata={"constraints": {"language": "cpp", "platform": "windows"}},
+        )
+        assert "Task Constraints" in prompt
+        assert "- language: cpp" in prompt
+        assert "- platform: windows" in prompt
+
+    def test_includes_harness_context_when_present(self, monkeypatch):
+        monkeypatch.setattr(
+            "prompts._load_harness_context",
+            lambda harness_name: "## harness-cpp/HARNESS.md\nC++20 only" if harness_name == "harness-cpp" else "",
+        )
+        prompt = get_system_prompt(
+            "implementer",
+            task_metadata={"constraints": {"harness": "harness-cpp"}},
+        )
+        assert "Harness Context" in prompt
+        assert "C++20 only" in prompt

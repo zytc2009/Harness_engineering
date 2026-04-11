@@ -86,7 +86,8 @@ Harness_engineering/
 │   ├── prompts.py             # 三角色系统提示（含 I/O Contract 规范）
 │   ├── orchestrator.py        # 流水线调度 + 语言感知测试分发
 │   ├── main.py                # CLI 入口（任务注册/续跑/状态查询）
-│   ├── harness_tasks.json     # 任务状态持久化
+│   ├── task_queue.json        # 任务生命周期与执行状态
+│   ├── status.json            # worker 当前快照
 │   └── tests/                 # 测试套件
 ├── skills/
 │   └── auto-dev/              # Claude Code skill：C++ 自动化闭环开发
@@ -197,7 +198,7 @@ echo "> 全新智能体请先读 \`harness/HARNESS.md\`。" >> AGENTS.md
 | 多 Agent 闭环 | architect → implementer → tester 自动循环，失败自动修复（最多 N 轮） |
 | I/O Contract | architect 强制在设计文档中定义 stdin/stdout 格式，消除 implementer/tester 歧义 |
 | 语言感知 tester | 自动检测实现语言，按扩展名分发执行器（Python / bash / C++ g++ 编译） |
-| 任务状态记录 | `harness_tasks.json` 持久化 phase、retry_count、duration_s、error，支持 `--list` 查询 |
+| 任务状态记录 | `task_queue.json` 持久化 status、phase、retry_count、duration_s、error，支持 `--list` / `--queue` 查询 |
 | 思考进度显示 | LLM 推理期间显示进度点，避免用户误以为程序卡住 |
 | 断点续跑 | `--resume <id>` 从 implementer 阶段继续未完成的任务 |
 | 跨会话记忆 | 自动提炼会话要点，下次启动时注入上下文 |
@@ -353,7 +354,7 @@ Task document enqueue:
 
 - `--add-file` expects a markdown task document with `Goal`, `Inputs`, `Outputs`, `Acceptance Criteria`, and `Status`
 - only documents with `Status: ready` or a `## Status` section set to `ready` are accepted
-- runtime stores the original task document path as `source_doc` so queue/history can point back to the requirement source
+- runtime stores the original task document path as `source_doc` so queue/status views can point back to the requirement source
 
 Additional files:
 

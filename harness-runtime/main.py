@@ -7,7 +7,6 @@ Supports interactive single-task execution plus queue-backed drain mode.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 import time
@@ -31,10 +30,10 @@ from task_queue import (
     next_pending,
     queue_counts,
     skip_task,
+    upsert_task as queue_upsert_task,
     update_task as queue_update_task,
 )
 
-_TASKS_FILE = Path(__file__).parent / "harness_tasks.json"
 _QUEUE_FILE = Path(__file__).parent / "task_queue.json"
 _STATUS_FILE = Path(__file__).parent / "status.json"
 _DOC_REQUIRED_SECTIONS = ("goal", "inputs", "outputs", "acceptance criteria", "status")
@@ -42,49 +41,6 @@ _DOC_REQUIRED_SECTIONS = ("goal", "inputs", "outputs", "acceptance criteria", "s
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _write_atomic(path: Path, data: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp")
-    tmp_path.write_text(data, encoding="utf-8")
-    tmp_path.replace(path)
-
-
-def _load_tasks() -> list[dict]:
-    if not _TASKS_FILE.exists():
-        return []
-    try:
-        data = json.loads(_TASKS_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-    return data if isinstance(data, list) else []
-
-
-def _save_tasks(tasks: list[dict]) -> None:
-    _write_atomic(_TASKS_FILE, json.dumps(tasks, ensure_ascii=False, indent=2))
-
-
-def _upsert_task(thread_id: str, description: str, status: str, **extra) -> None:
-    tasks = _load_tasks()
-    now = _now()
-    for task in tasks:
-        if task["id"] == thread_id:
-            task["status"] = status
-            task["updated"] = now
-            task.update(extra)
-            _save_tasks(tasks)
-            return
-    record = {
-        "id": thread_id,
-        "description": description[:100],
-        "status": status,
-        "created": now,
-        "updated": now,
-    }
-    record.update(extra)
-    tasks.append(record)
-    _save_tasks(tasks)
 
 
 def _parse_task_doc_sections(text: str) -> dict[str, str]:
@@ -130,7 +86,25 @@ def _render_doc_task_description(sections: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def _load_task_doc(doc_path: str | Path) -> tuple[Path, str]:
+def _parse_constraints(section_text: str) -> dict[str, str]:
+    constraints: dict[str, str] = {}
+    for raw_line in section_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(("-", "*")):
+            line = line[1:].strip()
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        key = key.strip().lower().replace(" ", "_")
+        value = value.strip()
+        if key and value:
+            constraints[key] = value
+    return constraints
+
+
+def _load_task_doc(doc_path: str | Path) -> tuple[Path, str, dict[str, str]]:
     path = Path(doc_path).resolve()
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(f"Task document not found: {path}")
@@ -143,32 +117,41 @@ def _load_task_doc(doc_path: str | Path) -> tuple[Path, str]:
         raise ValueError(f"Task document missing required sections: {', '.join(missing)}")
     if sections["status"].strip().lower() != "ready":
         raise ValueError(f"Task document is not ready for enqueue: {path}")
-    return path, _render_doc_task_description(sections)
-
-
-def _repair_history_for_stale_running_tasks(stale_task_ids: set[str]) -> None:
-    if not stale_task_ids:
-        return
-    queue_by_id = {task["id"]: task for task in load_queue(_QUEUE_FILE) if task.get("id") in stale_task_ids}
-    for task_id in stale_task_ids:
-        task = queue_by_id.get(task_id)
-        if task is None:
-            continue
-        _upsert_task(
-            task_id,
-            task.get("description", ""),
-            "failed",
-            phase="interrupted",
-            retry_count=task.get("retry_count", 0),
-            duration_s=task.get("duration_s"),
-            error="worker_interrupted",
-            source_doc=task.get("source_doc"),
-            source_type=task.get("source_type"),
-        )
+    constraints = _parse_constraints(sections.get("constraints", ""))
+    return path, _render_doc_task_description(sections), constraints
 
 
 def _incomplete_tasks() -> list[dict]:
-    return [task for task in _load_tasks() if task["status"] in ("running", "failed")]
+    return [task for task in load_queue(_QUEUE_FILE) if task.get("status") in ("running", "failed")]
+
+
+def _queue_upsert_execution_task(thread_id: str, description: str, status: str, **extra) -> None:
+    existing = next((task for task in load_queue(_QUEUE_FILE) if task.get("id") == thread_id), None)
+    now = _now()
+    record = {
+        "id": thread_id,
+        "description": description[:100],
+        "status": status,
+        "phase": None,
+        "retry_count": 0,
+        "max_retries": 3,
+        "error": None,
+        "created": now,
+        "updated": now,
+        "started_at": None,
+        "finished_at": None,
+        "duration_s": None,
+        "source_doc": None,
+        "source_type": None,
+        "constraints": None,
+    }
+    if existing is not None:
+        record.update(existing)
+    record.update(extra)
+    record["id"] = thread_id
+    record["description"] = description[:100]
+    record["status"] = status
+    queue_upsert_task(record, _QUEUE_FILE)
 
 
 def _task_sandbox_dir(task_id: str) -> Path:
@@ -249,7 +232,7 @@ def print_banner(thread_id: str, sandbox_dir: Path | None = None) -> None:
 
 
 def list_tasks() -> None:
-    tasks = _load_tasks()
+    tasks = load_queue(_QUEUE_FILE)
     if not tasks:
         print("No saved tasks.")
         return
@@ -298,13 +281,14 @@ def handle_add(description: str, max_retries: int = 3) -> str:
 
 
 def handle_add_file(doc_path: str, max_retries: int = 3) -> str:
-    resolved_doc_path, description = _load_task_doc(doc_path)
+    resolved_doc_path, description, constraints = _load_task_doc(doc_path)
     task_id = queue_add_task(
         description,
         _QUEUE_FILE,
         max_retries=max_retries,
         source_doc=str(resolved_doc_path),
         source_type="task_doc",
+        constraints=constraints,
     )
     pending, running, done, failed, cancelled, skipped = _queue_snapshot()
     last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
@@ -494,10 +478,8 @@ def _status_callback_for_task(thread_id: str, description: str, max_retries: int
 
 def run_drain(max_retries: int = 3) -> None:
     config.validate()
-    stale_task_ids = {task["id"] for task in load_queue(_QUEUE_FILE) if task.get("status") == "running"}
     repaired = mark_stale_running_as_failed(_QUEUE_FILE)
     if repaired:
-        _repair_history_for_stale_running_tasks(stale_task_ids)
         print(f"[HARNESS] Recovered {repaired} interrupted running task(s).")
 
     while True:
@@ -510,6 +492,7 @@ def run_drain(max_retries: int = 3) -> None:
         thread_id = task["id"]
         user_input = task["description"]
         task_max_retries = int(task.get("max_retries") or max_retries)
+        task_metadata = {"constraints": task.get("constraints") or {}}
         sandbox_dir = _task_sandbox_dir(thread_id)
         print_banner(thread_id, sandbox_dir)
 
@@ -522,7 +505,7 @@ def run_drain(max_retries: int = 3) -> None:
             error=None,
             max_retries=task_max_retries,
         )
-        _upsert_task(
+        _queue_upsert_execution_task(
             thread_id,
             user_input,
             "running",
@@ -548,6 +531,7 @@ def run_drain(max_retries: int = 3) -> None:
                 max_retries=task_max_retries,
                 sandbox_dir=sandbox_dir,
                 on_status=callback,
+                task_metadata=task_metadata,
             )
         except KeyboardInterrupt:
             duration = round(time.monotonic() - started, 1)
@@ -560,7 +544,7 @@ def run_drain(max_retries: int = 3) -> None:
                 duration_s=duration,
                 finished_at=_now(),
             )
-            _upsert_task(
+            _queue_upsert_execution_task(
                 thread_id,
                 user_input,
                 "failed",
@@ -607,7 +591,7 @@ def run_drain(max_retries: int = 3) -> None:
                 duration_s=duration,
                 finished_at=finished_at,
             )
-            _upsert_task(
+            _queue_upsert_execution_task(
                 thread_id,
                 user_input,
                 "failed",
@@ -660,7 +644,7 @@ def run_drain(max_retries: int = 3) -> None:
             finished_at=finished_at,
             error=final_error,
         )
-        _upsert_task(
+        _queue_upsert_execution_task(
             thread_id,
             user_input,
             final_status,
@@ -733,7 +717,15 @@ def _choose_interactive_task() -> tuple[str, str, str]:
 def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retries: int) -> None:
     sandbox_dir = _task_sandbox_dir(thread_id)
     print_banner(thread_id, sandbox_dir)
-    _upsert_task(thread_id, user_input, "running", phase=start_phase, retry_count=0)
+    _queue_upsert_execution_task(
+        thread_id,
+        user_input,
+        "running",
+        phase=start_phase,
+        retry_count=0,
+        started_at=_now(),
+        max_retries=max_retries,
+    )
     pending, running, done, failed, cancelled, skipped = _queue_snapshot()
     last_task_id, last_task_description, last_task_finished_at = _last_task_snapshot()
     update_status(
@@ -761,11 +753,11 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
     started = time.monotonic()
     try:
         if start_phase == "architect":
-            architect_phase(user_input, sandbox_dir=sandbox_dir)
+            architect_phase(user_input, sandbox_dir=sandbox_dir, task_metadata={"constraints": {}})
             _print_design_preview(sandbox_dir)
             if not _confirm("  Proceed with implementation? (yes/no): "):
                 print("  [HARNESS] Implementation cancelled.")
-                _upsert_task(thread_id, user_input, "failed", phase="cancelled", error="cancelled")
+                _queue_upsert_execution_task(thread_id, user_input, "failed", phase="cancelled", error="cancelled")
                 pending, running, done, failed, cancelled, skipped = _queue_snapshot()
                 update_status(
                     worker_state="stopped",
@@ -798,11 +790,12 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
             start_phase=start_phase,
             max_retries=max_retries,
             sandbox_dir=sandbox_dir,
+            task_metadata={"constraints": {}},
         )
     except KeyboardInterrupt:
         duration = round(time.monotonic() - started, 1)
         print("\n\n[HARNESS] Interrupted.")
-        _upsert_task(
+        _queue_upsert_execution_task(
             thread_id,
             user_input,
             "failed",
@@ -838,7 +831,7 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
     except Exception as exc:
         duration = round(time.monotonic() - started, 1)
         print(f"\n[HARNESS] Error: {exc}")
-        _upsert_task(thread_id, user_input, "failed", duration_s=duration, error=str(exc)[:200])
+        _queue_upsert_execution_task(thread_id, user_input, "failed", duration_s=duration, error=str(exc)[:200])
         pending, running, done, failed, cancelled, skipped = _queue_snapshot()
         update_status(
             worker_state="stopped",
@@ -893,7 +886,7 @@ def _run_single_task(thread_id: str, user_input: str, start_phase: str, max_retr
     print("=" * 55)
 
     status = "failed" if result.get("failed") else "done"
-    _upsert_task(
+    _queue_upsert_execution_task(
         thread_id,
         user_input,
         status,
@@ -981,7 +974,7 @@ def main() -> None:
     max_retries = int(config.get_setting("MAX_RETRIES", "3"))
 
     if args.resume:
-        tasks = _load_tasks()
+        tasks = load_queue(_QUEUE_FILE)
         match = next((task for task in tasks if task["id"] == args.resume), None)
         if not match:
             print(f"[ERROR] Thread '{args.resume}' not found. Use --list to see saved tasks.")

@@ -14,7 +14,6 @@ class TestDrainIntegration:
     def test_full_queue_drain(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("task A", queue_path)
@@ -44,7 +43,6 @@ class TestDrainIntegration:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -66,7 +64,6 @@ class TestDrainIntegration:
     def test_mixed_success_and_failure_keep_fifo(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         add_task("will fail", queue_path)
@@ -80,7 +77,6 @@ class TestDrainIntegration:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),
@@ -97,7 +93,6 @@ class TestDrainIntegration:
     def test_each_task_uses_its_own_sandbox_dir(self, tmp_path):
         queue_path = tmp_path / "q.json"
         status_path = tmp_path / "status.json"
-        tasks_path = tmp_path / "tasks.json"
         sandbox_root = tmp_path / "sandbox"
 
         first_id = add_task("first", queue_path)
@@ -111,7 +106,6 @@ class TestDrainIntegration:
         with (
             patch("main._QUEUE_FILE", queue_path),
             patch("main._STATUS_FILE", status_path),
-            patch("main._TASKS_FILE", tasks_path),
             patch("main.SANDBOX", sandbox_root),
             patch("main.config.validate"),
             patch("main.print_banner"),

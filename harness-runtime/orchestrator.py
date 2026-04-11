@@ -103,11 +103,15 @@ def _read_sandbox(sandbox_dir: str | Path | None = None) -> dict[str, str]:
     return result
 
 
-def architect_phase(task: str, sandbox_dir: str | Path | None = None) -> str:
+def architect_phase(
+    task: str,
+    sandbox_dir: str | Path | None = None,
+    task_metadata: dict | None = None,
+) -> str:
     """One LLM call -> design.md in sandbox."""
     print("\n[HARNESS] Phase: architect")
     text = _call_llm("architect", [
-        SystemMessage(content=get_system_prompt("architect")),
+        SystemMessage(content=get_system_prompt("architect", task_metadata=task_metadata)),
         HumanMessage(content=task),
     ])
 
@@ -124,6 +128,7 @@ def implementer_phase(
     design: str,
     feedback: str = "",
     sandbox_dir: str | Path | None = None,
+    task_metadata: dict | None = None,
 ) -> dict[str, str]:
     """One LLM call -> code files written to sandbox."""
     print("\n[HARNESS] Phase: implementer")
@@ -133,7 +138,7 @@ def implementer_phase(
         prompt += f"\n\n## Test Failures to Fix\n{feedback}"
 
     text = _call_llm("implementer", [
-        SystemMessage(content=get_system_prompt("implementer")),
+        SystemMessage(content=get_system_prompt("implementer", task_metadata=task_metadata)),
         HumanMessage(content=prompt),
     ])
 
@@ -253,6 +258,7 @@ def tester_phase(
     design: str,
     code_files: dict[str, str],
     sandbox_dir: str | Path | None = None,
+    task_metadata: dict | None = None,
 ) -> tuple[bool, str]:
     """One LLM call -> test file generated -> executed locally."""
     print("\n[HARNESS] Phase: tester")
@@ -278,7 +284,7 @@ def tester_phase(
     )
 
     text = _call_llm("tester", [
-        SystemMessage(content=get_system_prompt("tester")),
+        SystemMessage(content=get_system_prompt("tester", task_metadata=task_metadata)),
         HumanMessage(content=prompt),
     ])
 
@@ -312,6 +318,7 @@ def run_pipeline(
     max_retries: int = int(config.get_setting("MAX_RETRIES", "3")),
     sandbox_dir: str | Path | None = None,
     on_status: Callable[[dict], None] | None = None,
+    task_metadata: dict | None = None,
 ) -> dict:
     """Run the full architect -> implementer -> tester pipeline."""
     design = ""
@@ -333,7 +340,7 @@ def run_pipeline(
 
     if start_phase == "architect":
         emit("phase_started", "architect", message="architect started")
-        result = architect_phase(task, sandbox_dir=target_dir)
+        result = architect_phase(task, sandbox_dir=target_dir, task_metadata=task_metadata)
         if result is None:
             emit("pipeline_cancelled", None, message="pipeline cancelled")
             return {"phase": "cancelled", "retry_count": 0, "tester_report": ""}
@@ -347,11 +354,23 @@ def run_pipeline(
     while True:
         if start_phase in ("architect", "implementer") or retry_count > 0:
             emit("phase_started", "implementer", message="implementer started")
-            code_files = implementer_phase(task, design, feedback=tester_report, sandbox_dir=target_dir)
+            code_files = implementer_phase(
+                task,
+                design,
+                feedback=tester_report,
+                sandbox_dir=target_dir,
+                task_metadata=task_metadata,
+            )
             emit("phase_finished", "implementer", message="implementer finished")
 
         emit("phase_started", "tester", message="tester started")
-        passed, tester_report = tester_phase(task, design, code_files, sandbox_dir=target_dir)
+        passed, tester_report = tester_phase(
+            task,
+            design,
+            code_files,
+            sandbox_dir=target_dir,
+            task_metadata=task_metadata,
+        )
         emit(
             "phase_finished",
             "tester",

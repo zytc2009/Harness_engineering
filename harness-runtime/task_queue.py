@@ -101,6 +101,7 @@ def add_task(
     max_retries: int = 3,
     source_doc: str | None = None,
     source_type: str | None = None,
+    constraints: dict[str, str] | None = None,
 ) -> str:
     def mutator(tasks: list[dict]) -> tuple[list[dict], str]:
         now = _now()
@@ -120,10 +121,38 @@ def add_task(
             "duration_s": None,
             "source_doc": source_doc,
             "source_type": source_type,
+            "constraints": constraints,
         }
         return [*tasks, new_task], task_id
 
     return _mutate_queue(queue_path, mutator)
+
+
+def upsert_task(task_record: dict, queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> None:
+    """Insert or replace a task record by id.
+
+    The caller owns the record shape; this helper only ensures atomic persistence
+    and refreshes the `updated` timestamp.
+    """
+
+    def mutator(tasks: list[dict]) -> tuple[list[dict], None]:
+        if not task_record.get("id"):
+            raise ValueError("Task record must include a non-empty 'id'")
+        now = _now()
+        record = {**task_record, "updated": now}
+        replaced = False
+        next_tasks = []
+        for task in tasks:
+            if task.get("id") == record["id"]:
+                next_tasks.append(record)
+                replaced = True
+            else:
+                next_tasks.append(task)
+        if not replaced:
+            next_tasks.append(record)
+        return next_tasks, None
+
+    _mutate_queue(queue_path, mutator)
 
 
 def get_task(task_id: str, queue_path: str | Path = _DEFAULT_QUEUE_FILE) -> dict | None:
@@ -216,6 +245,7 @@ def mark_stale_running_as_failed(queue_path: str | Path = _DEFAULT_QUEUE_FILE) -
                 next_tasks.append({
                     **task,
                     "status": "failed",
+                    "phase": "interrupted",
                     "error": "worker_interrupted",
                     "finished_at": now,
                     "updated": now,
