@@ -78,8 +78,13 @@ Output each file using this exact format:
 ...code...
 ```
 
-Output ALL files in one response. Do not explain between files.
-When done, state `IMPLEMENTATION COMPLETE` on its own line.
+Output ALL files in one response.
+ONLY emit one or more `## FILE:` blocks followed by code fences.
+Do NOT include prose, commentary, links, summaries, status updates, or any markdown outside the `## FILE:` blocks.
+Do NOT describe what you changed.
+Do NOT say "updated", "modified", or "here is".
+Do NOT mention repository paths, clickable links, or absolute file paths.
+Do NOT add `IMPLEMENTATION COMPLETE` or any trailing text.
 
 If you are fixing test failures, focus on the reported errors and fix only what is broken.
 """
@@ -111,7 +116,14 @@ Write `test_impl.py` that runs `go test ./...` via subprocess.
 - Match the extension to the strategy above
 - Base all expected outputs on the `## I/O Contract` in the design document
 - Cover happy path, edge cases, and error handling
-- After the file block, briefly state what you tested
+- The sandbox is a flat directory rooted at `Path(__file__).resolve().parent`
+- The ONLY files you may read are the files shown in the `## Implementation` section above
+- All file paths MUST be relative to `Path(__file__).resolve().parent`
+- Never construct paths like `harness-runtime/...`, repo-root paths, home-directory paths, or any invented subdirectories
+- If the `## Implementation` section is empty or contains no real implementation files, emit a failing test that reports missing implementation artifacts
+- Do NOT treat the design document by itself as a passing implementation
+- If the acceptance criteria mention files that are NOT present in the implementation list, validate them via string assertions against the provided document content instead of reading additional files
+- Do NOT include any prose before or after the file block
 """
 
 _PHASE_PROMPTS = {

@@ -228,6 +228,35 @@ class TestRunPipeline:
         assert result.get("failed") is True
         assert result["retry_count"] == 2
 
+    def test_pipeline_retries_when_implementer_outputs_no_files(self):
+        with (
+            patch("orchestrator.execution.validate_runtime"),
+            patch("orchestrator.architect_phase", return_value="design"),
+            patch("orchestrator.implementer_phase", side_effect=[{}, {"main.py": "x"}]) as mock_impl,
+            patch("orchestrator.tester_phase", return_value=(True, "ok")) as mock_test,
+        ):
+            result = run_pipeline("build something", max_retries=3)
+
+        assert result["phase"] == "done"
+        assert result["retry_count"] == 1
+        assert mock_impl.call_count == 2
+        mock_test.assert_called_once()
+
+    def test_pipeline_fails_without_running_tester_when_implementer_never_outputs_files(self):
+        with (
+            patch("orchestrator.execution.validate_runtime"),
+            patch("orchestrator.architect_phase", return_value="design"),
+            patch("orchestrator.implementer_phase", return_value={}),
+            patch("orchestrator.tester_phase") as mock_test,
+        ):
+            result = run_pipeline("build something", max_retries=2)
+
+        assert result["phase"] == "done"
+        assert result.get("failed") is True
+        assert result["retry_count"] == 2
+        assert "no parseable `## FILE:` blocks" in result["tester_report"]
+        mock_test.assert_not_called()
+
     def test_pipeline_cancelled_by_user(self):
         with (
             patch("orchestrator.execution.validate_runtime"),
