@@ -17,7 +17,7 @@ Refresh the runtime-facing README content so the documentation clearly explains 
 
 - Repo root: current workspace
 - Existing runtime docs in `README.md` and `harness-runtime/TASK_FORMAT.md`
-- Current execution-mode implementation in `harness-runtime/execution.py`
+- Existing runtime CLI and execution-mode behavior as already reflected in the touched docs and task constraints
 
 ## Outputs
 
@@ -33,6 +33,11 @@ Refresh the runtime-facing README content so the documentation clearly explains 
 - The updated docs include at least one `codex exec -c approval_mode=full-auto -o {output_file} -` example
 - Command examples remain consistent with the current runtime CLI names shown in the touched docs
 - No Python source files under `harness-runtime/` are modified
+
+Notes:
+
+- Acceptance criteria must be verifiable from the updated documentation itself
+- Do not require tests to read runtime Python source files outside the sandbox
 
 ## Constraints
 

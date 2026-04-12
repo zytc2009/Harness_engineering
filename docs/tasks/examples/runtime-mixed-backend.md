@@ -17,7 +17,7 @@ Update runtime documentation so the architecture section reflects the current qu
 
 - Repo root: current workspace
 - Existing docs in `README.md`, `docs/superpowers/CURRENT_STATE.md`, and `harness-runtime/TASK_FORMAT.md`
-- Runtime execution backend implementation in `harness-runtime/execution.py`
+- Existing runtime execution-mode behavior as already reflected in the touched docs and task constraints
 
 ## Outputs
 
@@ -33,6 +33,11 @@ Update runtime documentation so the architecture section reflects the current qu
 - The resulting docs include at least one phase-specific execution key such as `architect_execution_mode` or `implementer_cli_command`
 - Examples remain consistent with current runtime command names shown in the touched docs
 - No Python files under `harness-runtime/` are modified
+
+Notes:
+
+- Acceptance criteria must be verifiable from the updated documentation itself
+- Do not require tests to read runtime Python source files outside the sandbox
 
 ## Constraints
 
