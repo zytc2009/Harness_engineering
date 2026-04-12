@@ -99,3 +99,84 @@ ready
 ```
 
 Optional sections such as `Scope`, `Constraints`, and `Open Questions` are also imported into the runtime task description.
+
+## Supported Constraints
+
+`## Constraints` is the place to declare runtime-facing execution hints and limits.
+
+Common keys:
+
+- `harness`: selects a `harness-*` package, for example `harness-cpp`
+- `execution_mode`: `provider` or `cli`
+- `cli_command`: global CLI command template for all phases
+- `cli_timeout`: global CLI timeout in seconds
+- `provider`: global provider override
+- `model`: global model override
+- `api_key`: global API key override
+- `base_url`: global OpenAI-compatible base URL override
+
+Phase-specific keys are also supported:
+
+- `architect_execution_mode`
+- `architect_cli_command`
+- `architect_cli_timeout`
+- `architect_provider`
+- `architect_model`
+- `architect_api_key`
+- `architect_base_url`
+- `implementer_execution_mode`
+- `implementer_cli_command`
+- `implementer_cli_timeout`
+- `implementer_provider`
+- `implementer_model`
+- `implementer_api_key`
+- `implementer_base_url`
+- `tester_execution_mode`
+- `tester_cli_command`
+- `tester_cli_timeout`
+- `tester_provider`
+- `tester_model`
+- `tester_api_key`
+- `tester_base_url`
+
+Priority is:
+
+1. phase-specific constraint
+2. global constraint
+3. phase-specific environment variable
+4. global environment variable
+5. runtime default
+
+## CLI Mode Example
+
+Use this when the model should be executed through a locally authenticated CLI rather than an API key:
+
+```markdown
+## Constraints
+- execution_mode: cli
+- cli_command: codex exec -c approval_mode=full-auto -o {output_file} -
+- cli_timeout: 240
+```
+
+Supported CLI placeholders:
+
+- `{prompt_file}`
+- `{prompt_content}`
+- `{output_file}`
+
+If the command uses none of the prompt placeholders, runtime sends the prompt via stdin.
+
+## Mixed Backend Example
+
+Use different backends per phase when needed:
+
+```markdown
+## Constraints
+- architect_execution_mode: provider
+- architect_provider: deepseek
+- architect_model: deepseek-reasoner
+- implementer_execution_mode: cli
+- implementer_cli_command: codex exec -c approval_mode=full-auto -o {output_file} -
+- tester_execution_mode: cli
+- tester_cli_command: codex exec -c approval_mode=full-auto -o {output_file} -
+```

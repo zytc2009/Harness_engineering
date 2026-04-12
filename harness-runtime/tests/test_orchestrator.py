@@ -4,7 +4,7 @@ import logging
 import sys
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -59,21 +59,12 @@ class TestParseFiles:
 
 
 class TestArchitectPhase:
-    def _make_llm_response(self, content: str):
-        mock_response = MagicMock()
-        mock_response.content = content
-        return mock_response
-
     def test_writes_design_md(self, tmp_path):
         design_text = "# My Design\nModules: foo, bar"
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value=design_text),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = self._make_llm_response(design_text)
-            mock_get_llm.return_value = mock_llm
-
             result = architect_phase("build a calculator")
 
         assert (tmp_path / "design.md").exists()
@@ -82,24 +73,16 @@ class TestArchitectPhase:
     def test_extracts_markdown_block(self, tmp_path):
         response = "Here is the design:\n```markdown\n# Design\ncontent\n```\nDESIGN COMPLETE"
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value=response),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = self._make_llm_response(response)
-            mock_get_llm.return_value = mock_llm
-
             result = architect_phase("build something")
 
         assert result == "# Design\ncontent"
 
     def test_respects_explicit_sandbox_dir(self, tmp_path):
         sandbox_dir = tmp_path / "task-123"
-        with patch("orchestrator.config.get_llm") as mock_get_llm:
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = self._make_llm_response("design text")
-            mock_get_llm.return_value = mock_llm
-
+        with patch("orchestrator.execution.invoke_phase", return_value="design text"):
             result = architect_phase("build something", sandbox_dir=sandbox_dir)
 
         assert result == "design text"
@@ -119,13 +102,9 @@ class TestImplementerPhase:
             ```
         """)
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value=response),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = MagicMock(content=response)
-            mock_get_llm.return_value = mock_llm
-
             files = implementer_phase("build x", "design text")
 
         assert "errors.py" in files
@@ -134,28 +113,20 @@ class TestImplementerPhase:
 
     def test_includes_feedback_in_prompt(self, tmp_path):
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value="## FILE: x.py\n```python\nx=1\n```") as mock_invoke,
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = MagicMock(content="## FILE: x.py\n```python\nx=1\n```")
-            mock_get_llm.return_value = mock_llm
-
             implementer_phase("task", "design", feedback="test failed: AssertionError")
 
-        call_args = mock_llm.invoke.call_args[0][0]
+        call_args = mock_invoke.call_args[0][1]
         human_content = call_args[-1].content
         assert "AssertionError" in human_content
 
     def test_returns_empty_dict_on_no_parse(self, tmp_path):
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value="Here is some text with no file blocks."),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = MagicMock(content="Here is some text with no file blocks.")
-            mock_get_llm.return_value = mock_llm
-
             files = implementer_phase("task", "design")
 
         assert files == {}
@@ -171,13 +142,9 @@ class TestTesterPhase:
         """)
         response = f"## FILE: test_impl.py\n```python\n{passing_test}\n```"
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value=response),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = MagicMock(content=response)
-            mock_get_llm.return_value = mock_llm
-
             passed, _report = _tester_phase("task", "design", {"main.py": "x=1"})
 
         assert passed is True
@@ -191,39 +158,27 @@ class TestTesterPhase:
         """)
         response = f"## FILE: test_impl.py\n```python\n{failing_test}\n```"
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value=response),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = MagicMock(content=response)
-            mock_get_llm.return_value = mock_llm
-
             passed, _ = _tester_phase("task", "design", {"main.py": "x=1"})
 
         assert passed is False
 
     def test_text_verdict_fallback(self, tmp_path):
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value="ALL TESTS PASSED. Everything looks good."),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = MagicMock(content="ALL TESTS PASSED. Everything looks good.")
-            mock_get_llm.return_value = mock_llm
-
             passed, _ = _tester_phase("task", "design", {"main.py": "x=1"})
 
         assert passed is True
 
     def test_text_verdict_fail_fallback(self, tmp_path):
         with (
-            patch("orchestrator.config.get_llm") as mock_get_llm,
+            patch("orchestrator.execution.invoke_phase", return_value="TESTS FAILED: something is wrong."),
             patch("orchestrator.SANDBOX", tmp_path),
         ):
-            mock_llm = MagicMock()
-            mock_llm.invoke.return_value = MagicMock(content="TESTS FAILED: something is wrong.")
-            mock_get_llm.return_value = mock_llm
-
             passed, _ = _tester_phase("task", "design", {"main.py": "x=1"})
 
         assert passed is False
@@ -232,6 +187,7 @@ class TestTesterPhase:
 class TestRunPipeline:
     def test_pipeline_passes_on_first_try(self):
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", return_value="design") as mock_arch,
             patch("orchestrator.implementer_phase", return_value={"main.py": "x"}) as mock_impl,
             patch("orchestrator.tester_phase", return_value=(True, "ok")) as mock_test,
@@ -246,6 +202,7 @@ class TestRunPipeline:
 
     def test_pipeline_retries_on_failure(self):
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", return_value="design"),
             patch("orchestrator.implementer_phase", return_value={"main.py": "x"}),
             patch("orchestrator.tester_phase", side_effect=[
@@ -260,6 +217,7 @@ class TestRunPipeline:
 
     def test_pipeline_stops_after_max_retries(self):
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", return_value="design"),
             patch("orchestrator.implementer_phase", return_value={"main.py": "x"}),
             patch("orchestrator.tester_phase", return_value=(False, "always fails")),
@@ -271,7 +229,10 @@ class TestRunPipeline:
         assert result["retry_count"] == 2
 
     def test_pipeline_cancelled_by_user(self):
-        with patch("orchestrator.architect_phase", return_value=None):
+        with (
+            patch("orchestrator.execution.validate_runtime"),
+            patch("orchestrator.architect_phase", return_value=None),
+        ):
             result = run_pipeline("build something")
 
         assert result["phase"] == "cancelled"
@@ -279,6 +240,7 @@ class TestRunPipeline:
     def test_feedback_passed_to_implementer_on_retry(self):
         feedback_report = "AssertionError on line 5"
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", return_value="design"),
             patch("orchestrator.implementer_phase", return_value={"main.py": "x"}) as mock_impl,
             patch("orchestrator.tester_phase", side_effect=[
@@ -293,6 +255,7 @@ class TestRunPipeline:
     def test_callback_receives_phase_events(self, tmp_path):
         events = []
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", return_value="design"),
             patch("orchestrator.implementer_phase", return_value={"main.py": "x"}),
             patch("orchestrator.tester_phase", return_value=(True, "ok")),
@@ -326,6 +289,7 @@ class TestRunPipeline:
     def test_callback_includes_retry_event(self, tmp_path):
         events = []
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", return_value="design"),
             patch("orchestrator.implementer_phase", return_value={"main.py": "x"}),
             patch("orchestrator.tester_phase", side_effect=[(False, "fail"), (True, "ok")]),
@@ -349,6 +313,7 @@ class TestRunPipeline:
         (sandbox_dir / "main.py").write_text("x=1", encoding="utf-8")
 
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.implementer_phase") as mock_impl,
             patch("orchestrator.tester_phase", return_value=(True, "ok")),
         ):
@@ -368,6 +333,7 @@ class TestRunPipeline:
         (sandbox_dir / "main.py").write_text("x=1", encoding="utf-8")
 
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.implementer_phase", return_value={"main.py": "fixed"}) as mock_impl,
             patch("orchestrator.tester_phase", side_effect=[(False, "fail"), (True, "ok")]),
         ):

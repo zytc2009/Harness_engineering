@@ -135,7 +135,15 @@ def _resolve_model(phase: str | None = None) -> str:
 
 # ── LLM Factory ───────────────────────────────────────────────────
 
-def get_llm(model: str | None = None, phase: str | None = None):
+def get_llm(
+    model: str | None = None,
+    phase: str | None = None,
+    *,
+    provider: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    user_agent: str | None = None,
+):
     """Build a LangChain LLM instance, optionally scoped to an agent phase.
 
     Per-phase env vars (all optional, fall back to global values):
@@ -151,18 +159,18 @@ def get_llm(model: str | None = None, phase: str | None = None):
     Returns:
         LangChain BaseChatModel instance.
     """
-    provider = _resolve_provider(phase)
+    provider = (provider or _resolve_provider(phase)).lower()
     if model is None:
         model = _resolve_model(phase)
-    api_key = _resolve_api_key(provider, phase)
+    api_key = api_key if api_key is not None else _resolve_api_key(provider, phase)
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(model=model, api_key=api_key)
 
     from langchain_openai import ChatOpenAI
-    base_url = _resolve_base_url(provider, phase)
-    user_agent = get_setting(f"{phase.upper()}_USER_AGENT") if phase else ""
+    base_url = base_url if base_url is not None else _resolve_base_url(provider, phase)
+    user_agent = user_agent if user_agent is not None else (get_setting(f"{phase.upper()}_USER_AGENT") if phase else "")
     headers = {"User-Agent": user_agent} if user_agent else {}
     return ChatOpenAI(model=model, api_key=api_key, base_url=base_url, default_headers=headers)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import config
+import execution
 from orchestrator import SANDBOX, run_pipeline
 from status import update_status
 from task_queue import load_queue, mark_stale_running_as_failed, next_pending, update_task as queue_update_task
@@ -37,7 +37,6 @@ def run_drain_with_hooks(
     run_pipeline_fn=run_pipeline,
     save_memory_if_present_fn=save_memory_if_present,
 ) -> None:
-    config.validate()
     repaired = mark_stale_running_as_failed(queue_file)
     if repaired:
         print(f"[HARNESS] Recovered {repaired} interrupted running task(s).")
@@ -54,7 +53,8 @@ def run_drain_with_hooks(
         task_max_retries = int(task.get("max_retries") or max_retries)
         task_metadata = {"constraints": task.get("constraints") or {}}
         sandbox_dir = task_sandbox_dir(thread_id, sandbox_root)
-        print_banner_fn(thread_id, sandbox_dir)
+        execution.validate_runtime(task_metadata=task_metadata)
+        print_banner_fn(thread_id, sandbox_dir, task_metadata=task_metadata)
 
         queue_update_task(
             thread_id,

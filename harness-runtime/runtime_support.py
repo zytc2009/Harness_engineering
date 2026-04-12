@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import config
+import execution
 from memory import extract_and_save_memory
 from orchestrator import SANDBOX, _read_sandbox
 from status import read_status, update_status
@@ -93,13 +93,12 @@ def queue_upsert_execution_task(
     queue_upsert_task(record, queue_file)
 
 
-def print_banner(thread_id: str, sandbox_dir: Path | None = None) -> None:
+def print_banner(thread_id: str, sandbox_dir: Path | None = None, task_metadata: dict | None = None) -> None:
     print("=" * 55)
     print("  Harness Runtime - Pipeline")
     for phase in ("architect", "implementer", "tester"):
-        provider = config._resolve_provider(phase)
-        model = config._resolve_model(phase)
-        print(f"  {phase.capitalize():<12}: {provider} / {model}")
+        descriptor = execution.describe_phase_execution(phase, task_metadata=task_metadata)
+        print(f"  {phase.capitalize():<12}: {descriptor}")
     if sandbox_dir is None:
         sandbox_dir = task_sandbox_dir(thread_id)
     print(f"  Sandbox      : {sandbox_dir}")

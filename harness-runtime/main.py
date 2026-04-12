@@ -22,6 +22,7 @@ def _configure_utf8_stdio() -> None:
             reconfigure(encoding="utf-8")
 
 import config
+import execution
 from drain import run_drain_with_hooks
 from interactive import choose_interactive_task, run_single_task_with_hooks
 from memory import extract_and_save_memory
@@ -198,7 +199,7 @@ def main() -> None:
         run_drain(max_retries=max_retries)
         return
 
-    config.validate()
+    execution.validate_runtime()
     max_retries = int(config.get_setting("MAX_RETRIES", "3"))
 
     if args.resume:

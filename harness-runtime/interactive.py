@@ -6,6 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
+import execution
 from memory import load_memories
 from orchestrator import SANDBOX, _read_sandbox, architect_phase, run_pipeline
 from status import update_status
@@ -95,7 +96,9 @@ def run_single_task_with_hooks(
     save_memory_if_present_fn=save_memory_if_present,
 ) -> None:
     sandbox_dir = task_sandbox_dir(thread_id, sandbox_root)
-    print_banner_fn(thread_id, sandbox_dir)
+    task_metadata = {"constraints": {}}
+    execution.validate_runtime(task_metadata=task_metadata)
+    print_banner_fn(thread_id, sandbox_dir, task_metadata=task_metadata)
     queue_upsert_execution_task(
         queue_file,
         thread_id,
@@ -133,7 +136,7 @@ def run_single_task_with_hooks(
     started = time.monotonic()
     try:
         if start_phase == "architect":
-            architect_phase_fn(user_input, sandbox_dir=sandbox_dir, task_metadata={"constraints": {}})
+            architect_phase_fn(user_input, sandbox_dir=sandbox_dir, task_metadata=task_metadata)
             print_design_preview_fn(sandbox_dir)
             if not confirm_fn("  Proceed with implementation? (yes/no): "):
                 print("  [HARNESS] Implementation cancelled.")
@@ -170,7 +173,7 @@ def run_single_task_with_hooks(
             start_phase=start_phase,
             max_retries=max_retries,
             sandbox_dir=sandbox_dir,
-            task_metadata={"constraints": {}},
+            task_metadata=task_metadata,
         )
     except KeyboardInterrupt:
         duration = monotonic_duration(started)

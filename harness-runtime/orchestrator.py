@@ -23,6 +23,7 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import config
+import execution
 from prompts import get_system_prompt
 
 SANDBOX = Path(tempfile.gettempdir()) / "harness_sandbox"
@@ -34,45 +35,6 @@ def _resolve_sandbox_dir(sandbox_dir: str | Path | None = None) -> Path:
     path = Path(sandbox_dir) if sandbox_dir is not None else SANDBOX
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def _call_llm(phase: str, messages: list) -> str:
-    """Single LLM call with streaming output. Returns cleaned text."""
-    llm = config.get_llm(phase=phase)
-    full_content = ""
-    in_think = False
-    think_chars = 0
-    try:
-        for chunk in llm.stream(messages):
-            text = chunk.content if isinstance(chunk.content, str) else ""
-            if not text:
-                continue
-            full_content += text
-            if "<think>" in text and not in_think:
-                in_think = True
-                print("  [thinking", end="", flush=True)
-                think_chars = 0
-            if in_think:
-                think_chars += len(text)
-                if think_chars >= 200:
-                    print(".", end="", flush=True)
-                    think_chars = 0
-                if "</think>" in text:
-                    in_think = False
-                    think_chars = 0
-                    print("]", flush=True)
-                continue
-            print(text, end="", flush=True)
-        print()
-        if not full_content:
-            response = llm.invoke(messages)
-            full_content = response.content if isinstance(response.content, str) else str(response.content)
-            print(full_content[:300] + "..." if len(full_content) > 300 else full_content)
-    except Exception:
-        response = llm.invoke(messages)
-        full_content = response.content if isinstance(response.content, str) else str(response.content)
-        print(full_content[:300] + "..." if len(full_content) > 300 else full_content)
-    return re.sub(r"<think>.*?</think>", "", full_content, flags=re.DOTALL).strip()
 
 
 def _parse_files(text: str) -> dict[str, str]:
@@ -110,10 +72,10 @@ def architect_phase(
 ) -> str:
     """One LLM call -> design.md in sandbox."""
     print("\n[HARNESS] Phase: architect")
-    text = _call_llm("architect", [
+    text = execution.invoke_phase("architect", [
         SystemMessage(content=get_system_prompt("architect", task_metadata=task_metadata)),
         HumanMessage(content=task),
-    ])
+    ], task_metadata=task_metadata)
 
     md = re.search(r"```(?:markdown|md)?\n(.*?)```", text, re.DOTALL)
     design = md.group(1).strip() if md else text
@@ -137,10 +99,10 @@ def implementer_phase(
     if feedback:
         prompt += f"\n\n## Test Failures to Fix\n{feedback}"
 
-    text = _call_llm("implementer", [
+    text = execution.invoke_phase("implementer", [
         SystemMessage(content=get_system_prompt("implementer", task_metadata=task_metadata)),
         HumanMessage(content=prompt),
-    ])
+    ], task_metadata=task_metadata)
 
     files = _parse_files(text)
     if not files:
@@ -283,10 +245,10 @@ def tester_phase(
         f"## Implementation\n{files_block}"
     )
 
-    text = _call_llm("tester", [
+    text = execution.invoke_phase("tester", [
         SystemMessage(content=get_system_prompt("tester", task_metadata=task_metadata)),
         HumanMessage(content=prompt),
-    ])
+    ], task_metadata=task_metadata)
 
     test_files = _parse_files(text)
     test_name, test_content = next(
@@ -321,6 +283,7 @@ def run_pipeline(
     task_metadata: dict | None = None,
 ) -> dict:
     """Run the full architect -> implementer -> tester pipeline."""
+    execution.validate_runtime(task_metadata=task_metadata)
     design = ""
     code_files = {}
     tester_report = ""
