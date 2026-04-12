@@ -18,6 +18,7 @@ import sys
 import tempfile
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -33,6 +34,13 @@ _IMPLEMENTER_EMPTY_OUTPUT = (
     "Implementer produced no parseable `## FILE:` blocks. "
     "The response must contain machine-readable file blocks only."
 )
+
+
+@dataclass(frozen=True)
+class RetryDecision:
+    exit_result: dict | None
+    next_phase: str
+    next_retry_count: int
 
 
 def _resolve_sandbox_dir(sandbox_dir: str | Path | None = None) -> Path:
@@ -164,28 +172,28 @@ def _handle_retry_or_failure(
     retry_count: int,
     max_retries: int,
     emit: Callable[[str, str | None, str | None, str | None], None],
-) -> dict | tuple[str, int]:
+) -> RetryDecision:
     next_retry_count = retry_count + 1
     if next_retry_count >= max_retries:
         print(f"\n[HARNESS] Max retries ({max_retries}) reached. Finishing with failures.")
         emit("pipeline_failed", None, report[:200] or None, "pipeline failed after max retries")
-        return {
-            "phase": "done",
-            "failed": True,
-            "retry_count": next_retry_count,
-            "tester_report": report,
-        }
+        return RetryDecision(
+            exit_result={
+                "phase": "done",
+                "failed": True,
+                "retry_count": next_retry_count,
+                "tester_report": report,
+            },
+            next_phase="implementer",
+            next_retry_count=next_retry_count,
+        )
 
     print(f"\n[HARNESS] Phase failed. Retrying implementation ({next_retry_count}/{max_retries})")
-    retry_count = next_retry_count
-    emit(
-        "retrying",
-        "implementer",
-        report[:200] or None,
-        "retrying after implementer/tester failure",
-        retry_count_override=retry_count,
+    return RetryDecision(
+        exit_result=None,
+        next_phase="implementer",
+        next_retry_count=next_retry_count,
     )
-    return "implementer", retry_count
 
 
 def _run_test(test_path: Path, sandbox_dir: str | Path | None = None) -> tuple[int, str]:
@@ -328,14 +336,13 @@ def run_pipeline(
         phase: str | None,
         error: str | None = None,
         message: str | None = None,
-        retry_count_override: int | None = None,
     ) -> None:
         if on_status is None:
             return
         on_status({
             "type": event_type,
             "phase": phase,
-            "retry_count": retry_count if retry_count_override is None else retry_count_override,
+            "retry_count": retry_count,
             "error": error,
             "message": message,
         })
@@ -366,15 +373,22 @@ def run_pipeline(
             emit("phase_finished", "implementer", message="implementer finished")
             if not code_files:
                 tester_report = _IMPLEMENTER_EMPTY_OUTPUT
-                retry_outcome = _handle_retry_or_failure(
+                decision = _handle_retry_or_failure(
                     tester_report,
                     retry_count,
                     max_retries,
                     emit,
                 )
-                if isinstance(retry_outcome, dict):
-                    return retry_outcome
-                start_phase, retry_count = retry_outcome
+                retry_count = decision.next_retry_count
+                if decision.exit_result is not None:
+                    return decision.exit_result
+                start_phase = decision.next_phase
+                emit(
+                    "retrying",
+                    "implementer",
+                    tester_report[:200] or None,
+                    "retrying after implementer/tester failure",
+                )
                 continue
 
         emit("phase_started", "tester", message="tester started")
@@ -401,12 +415,19 @@ def run_pipeline(
                 "tester_report": tester_report,
             }
 
-        retry_outcome = _handle_retry_or_failure(
+        decision = _handle_retry_or_failure(
             tester_report,
             retry_count,
             max_retries,
             emit,
         )
-        if isinstance(retry_outcome, dict):
-            return retry_outcome
-        start_phase, retry_count = retry_outcome
+        retry_count = decision.next_retry_count
+        if decision.exit_result is not None:
+            return decision.exit_result
+        start_phase = decision.next_phase
+        emit(
+            "retrying",
+            "implementer",
+            tester_report[:200] or None,
+            "retrying after implementer/tester failure",
+        )
