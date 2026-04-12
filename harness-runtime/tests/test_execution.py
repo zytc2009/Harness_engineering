@@ -70,6 +70,12 @@ class TestValidation:
         env_vars(EXECUTION_MODE="cli", CLI_COMMAND="codex exec -o {output_file} -")
         execution.validate_runtime()
 
+    def test_windows_cli_rejects_prompt_content(self, env_vars):
+        env_vars(EXECUTION_MODE="cli", CLI_COMMAND="tool --prompt {prompt_content}")
+        with patch.object(execution.sys, "platform", "win32"):
+            with pytest.raises(EnvironmentError, match="cannot use \\{prompt_content\\} on Windows"):
+                execution.validate_runtime()
+
 
 class TestInvokePhase:
     def test_invoke_phase_cli_uses_subprocess(self, env_vars):

@@ -101,13 +101,23 @@ def _validate_cli_command(command: str, phase: str) -> None:
         raise EnvironmentError(
             f"{phase.upper()} CLI command must accept prompt input via {{prompt_file}}, {{prompt_content}}, or stdin '-'."
         )
+    if sys.platform == "win32" and "{prompt_content}" in command:
+        raise EnvironmentError(
+            f"{phase.upper()} CLI command cannot use {{prompt_content}} on Windows. "
+            "Use {prompt_file} or stdin '-' instead."
+        )
 
 
-def validate_phase_execution(phase: str, task_metadata: dict | None = None) -> None:
-    resolved = resolve_phase_execution(phase, task_metadata=task_metadata)
+def validate_phase_execution(
+    phase: str,
+    task_metadata: dict | None = None,
+    *,
+    resolved: dict[str, str | int] | None = None,
+) -> dict[str, str | int]:
+    resolved = resolved or resolve_phase_execution(phase, task_metadata=task_metadata)
     if resolved["mode"] == "cli":
         _validate_cli_command(str(resolved["command"]), phase)
-        return
+        return resolved
 
     provider = str(resolved["provider"])
     api_key = str(resolved["api_key"])
@@ -122,13 +132,14 @@ def validate_phase_execution(phase: str, task_metadata: dict | None = None) -> N
             f"\n{phase.upper()} uses provider={provider} but no API key found.\n"
             f"Set {phase.upper()}_API_KEY or OPENAI_COMPATIBLE_API_KEY in .env\n"
         )
+    return resolved
 
 
 def validate_runtime(task_metadata: dict | None = None) -> None:
     needs_openai = False
     for phase in ("architect", "implementer", "tester"):
-        validate_phase_execution(phase, task_metadata=task_metadata)
         resolved = resolve_phase_execution(phase, task_metadata=task_metadata)
+        validate_phase_execution(phase, task_metadata=task_metadata, resolved=resolved)
         if resolved["mode"] == "provider" and str(resolved["provider"]) != "anthropic":
             needs_openai = True
 
