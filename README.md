@@ -1,14 +1,14 @@
 # Harness Engineering
 
-Infrastructure for separating requirement clarification from execution runtime in AI-assisted development workflows.
+Infrastructure for splitting task clarification from runtime execution in AI-assisted development workflows.
 
-The current architecture is intentionally layered:
+The current repository is layered:
 
-- `skills/auto-dev`: entry layer for requirement clarification, task document creation, and enqueue
-- `harness-runtime`: execution layer for validation, queueing, execution, retries, and status
-- `harness-*`: language- or stack-specific execution constraint packages such as `harness-cpp`
+- `skills/auto-dev`: requirement clarification, task document generation, and enqueue guidance
+- `harness-runtime`: queue management, validation, execution, retries, and status reporting
+- `harness-*`: harness packages that define stack-specific execution constraints such as `harness-cpp`
 
-If you are resuming work, start from these files:
+If you are resuming work, start from:
 
 - `docs/superpowers/CURRENT_STATE.md`
 - `docs/superpowers/plans/2026-04-11-skill-runtime-boundary.md`
@@ -16,82 +16,116 @@ If you are resuming work, start from these files:
 - `docs/tasks/task-template.md`
 - `skills/auto-dev/SKILL.md`
 
-## Current Model
+## Runtime Overview
 
-### Task hand-off uses markdown task documents
+The runtime consumes markdown task documents, validates them, places them on the queue, and runs each task through the `architect`, `implementer`, and `tester` phases.
 
-Canonical template:
+Canonical task template:
 
 - `docs/tasks/task-template.md`
 
-Enqueue with:
+Basic enqueue command:
 
 ```bash
-python harness-runtime/main.py --add-file <task-doc-path>
+python harness-runtime/main.py --add-file docs/tasks/task-001.md
 ```
 
 Task documents should define:
 
 - `Goal`
-- `Scope`
 - `Inputs`
 - `Outputs`
 - `Acceptance Criteria`
-- `Constraints`
 - `Status`
+
+Common optional sections:
+
+- `Scope`
+- `Constraints`
+- `Open Questions`
 
 Only task documents with `Status: ready` should be enqueued.
 
-### Runtime owns execution state
+## Queue And Status
 
-Current state model:
+The runtime keeps queue and worker state in:
 
-- `task_queue.json`: single source of truth for task lifecycle and execution fields
-- `status.json`: worker snapshot
+- `harness-runtime/task_queue.json`: queued task lifecycle and retry state
+- `harness-runtime/status.json`: latest worker snapshot
 
-`harness_tasks.json` is no longer part of the active design.
-
-### Skill reads machine-readable runtime status
-
-Use:
+Human-readable commands from the repo root:
 
 ```bash
-python harness-runtime/main.py --status-json
+python harness-runtime/main.py --queue
+python harness-runtime/main.py --status
+```
+
+Automation-safe JSON commands:
+
+```bash
 python harness-runtime/main.py --queue-json
+python harness-runtime/main.py --status-json
 ```
 
-Do not treat terminal-formatted human output as the automation interface.
+Use the JSON variants when another tool or script is reading runtime state. The text variants are intended for operators.
 
-### Harness selection is metadata-driven
+Common runtime commands:
 
-Task documents may declare:
-
-```md
-## Constraints
-- harness: harness-cpp
+```bash
+python harness-runtime/main.py --validate-task-doc docs/tasks/task-001.md
+python harness-runtime/main.py --add "[Goal] Refresh runtime docs"
+python harness-runtime/main.py --add-file docs/tasks/task-001.md
+python harness-runtime/main.py --queue
+python harness-runtime/main.py --queue-json
+python harness-runtime/main.py --status
+python harness-runtime/main.py --status-json
+python harness-runtime/main.py --cancel <task-id>
+python harness-runtime/main.py --skip <task-id>
+python harness-runtime/main.py --list
+python harness-runtime/main.py --resume <task-id>
+python harness-runtime/main.py --drain
 ```
 
-Runtime uses this metadata to discover and load the matching `harness-*` package.
+Command notes:
 
-Contract details:
+- `--validate-task-doc` checks a markdown task document without enqueueing it
+- `--queue` and `--queue-json` read the current queue state
+- `--status` and `--status-json` read the latest worker snapshot
+- `--drain` processes pending queue tasks and exits
+- `--resume` restarts a saved task by id
 
-- `docs/superpowers/harness-contract.md`
+## Execution Backends
 
-### Runtime execution backend can be `provider` or `cli`
+Each phase resolves independently:
 
-`harness-runtime` now supports two execution backends for each phase:
+- `architect`
+- `implementer`
+- `tester`
 
-- `provider`: existing LangChain/provider path using API keys and model/base URL config
-- `cli`: local CLI invocation path for tools such as `codex` that may rely on local login state instead of API keys
+Each phase can run in one of two execution modes:
 
-Resolution priority is:
+- `provider`: provider-backed execution using provider, model, and API settings
+- `cli`: local CLI-backed execution using a configured command template
 
-1. task document `Constraints`
-2. phase-specific environment variables
-3. global environment variables
-4. default `provider`
+Resolution order for every phase:
 
-Global example:
+1. phase-specific task constraint
+2. global task constraint
+3. phase-specific environment variable
+4. global environment variable
+5. runtime default
+
+The runtime default execution mode is `provider`.
+
+### Provider Example
+
+```env
+ARCHITECT_EXECUTION_MODE=provider
+ARCHITECT_PROVIDER=deepseek
+ARCHITECT_MODEL=deepseek-reasoner
+```
+
+### CLI Example
 
 ```env
 EXECUTION_MODE=cli
@@ -99,38 +133,60 @@ CLI_COMMAND=codex exec -c approval_mode=full-auto -o {output_file} -
 CLI_TIMEOUT=180
 ```
 
-Mixed phase example:
+The default CLI timeout is `180` seconds if no task or environment override is set.
 
-```env
-ARCHITECT_EXECUTION_MODE=provider
-ARCHITECT_PROVIDER=deepseek
-ARCHITECT_MODEL=deepseek-reasoner
+### Mixed Per-Phase Example
 
-IMPLEMENTER_EXECUTION_MODE=cli
-IMPLEMENTER_CLI_COMMAND=codex exec -c approval_mode=full-auto -o {output_file} -
-
-TESTER_EXECUTION_MODE=cli
-TESTER_CLI_COMMAND=codex exec -c approval_mode=full-auto -o {output_file} -
+```markdown
+## Constraints
+- architect_execution_mode: provider
+- architect_provider: deepseek
+- architect_model: deepseek-reasoner
+- implementer_execution_mode: cli
+- implementer_cli_command: codex exec -c approval_mode=full-auto -o {output_file} -
+- tester_execution_mode: cli
+- tester_cli_command: codex exec -c approval_mode=full-auto -o {output_file} -
 ```
 
-Supported CLI command placeholders:
+## CLI Command Rules
 
-- `{prompt_file}`: runtime writes the full prompt to a temp file and substitutes the file path
-- `{prompt_content}`: runtime substitutes the full prompt inline into the command string
-- `{output_file}`: runtime allocates a temp file for tools that write output to a file
+Supported CLI placeholders:
 
-If no prompt placeholder is used, runtime sends the prompt to stdin.
+- `{prompt_file}`: runtime writes the prompt to a temp file and substitutes that path
+- `{prompt_content}`: runtime substitutes the full prompt inline in the command
+- `{output_file}`: runtime allocates a temp output file and substitutes that path
 
-Task document override example:
+CLI input and output behavior:
 
-```md
+- if neither `{prompt_file}` nor `{prompt_content}` is present, the runtime sends prompt content over stdin
+- a CLI command must accept input through `{prompt_file}`, `{prompt_content}`, or stdin-style `-`
+- if `{output_file}` is configured, runtime reads the final result from that file
+- if `{output_file}` is not configured, runtime reads the final result from stdout
+
+Codex task-constraint example:
+
+```markdown
 ## Constraints
 - execution_mode: cli
 - cli_command: codex exec -c approval_mode=full-auto -o {output_file} -
-- tester_execution_mode: provider
-- tester_provider: deepseek
-- tester_model: deepseek-chat
+- cli_timeout: 240
 ```
+
+## Harness Selection
+
+Task documents may declare:
+
+```markdown
+## Constraints
+- harness: harness-cpp
+```
+
+The runtime uses that metadata to load the matching `harness-*` package.
+
+For the task-document format and detailed constraint reference, see:
+
+- `harness-runtime/TASK_FORMAT.md`
+- `docs/superpowers/harness-contract.md`
 
 ## Main Paths
 
@@ -140,23 +196,9 @@ Task document override example:
 - `docs/superpowers/`
 - `docs/tasks/`
 
-## Common Commands
+## Runtime Completion Summary
 
-```bash
-python harness-runtime/main.py --validate-task-doc <task-doc-path>
-python harness-runtime/main.py --add-file <task-doc-path>
-python harness-runtime/main.py --queue
-python harness-runtime/main.py --queue-json
-python harness-runtime/main.py --status
-python harness-runtime/main.py --status-json
-python harness-runtime/main.py --drain
-```
-
-When using CLI mode, the same queue and drain commands apply. Only the phase execution backend changes.
-
-## Notes
-
-- `auto-dev` is not an execution engine
-- `harness-runtime` is not the primary requirement discussion interface
-- `harness-cpp` is the first concrete harness, not a permanent hard dependency of `auto-dev`
-- when in doubt, prefer `CURRENT_STATE.md` over old conversation history
+- queue inspection: `--queue` and `--queue-json`
+- status inspection: `--status` and `--status-json`
+- execution model: each phase resolves independently to `provider` or `cli`
+- CLI-backed execution: supported through command templates such as `codex exec -c approval_mode=full-auto -o {output_file} -`

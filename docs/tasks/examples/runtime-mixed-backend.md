@@ -28,8 +28,10 @@ Update runtime documentation so the architecture section reflects the current qu
 ## Acceptance Criteria
 
 - The resulting docs describe both queue ownership and execution backend selection
-- The task uses provider mode for architect and CLI mode for implementer/tester
-- Examples remain consistent with current runtime command names
+- The resulting docs explicitly mention `provider` and `cli`
+- The resulting docs include at least one `codex exec -c approval_mode=full-auto -o {output_file} -` example
+- The resulting docs include at least one phase-specific execution key such as `architect_execution_mode` or `implementer_cli_command`
+- Examples remain consistent with current runtime command names shown in the touched docs
 - No Python files under `harness-runtime/` are modified
 
 ## Constraints

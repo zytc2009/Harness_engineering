@@ -1,17 +1,60 @@
 # Task Format Guide
 
-Use this guide when adding work with `python main.py --add "<task>"`.
+Use this guide when authoring, validating, or enqueueing runtime task documents from the repo root.
 
-## Minimum Task Content
+## Runtime CLI
 
-A good queue task should include:
+The runtime entry point is:
+
+```bash
+python harness-runtime/main.py
+```
+
+Relevant commands:
+
+```bash
+python harness-runtime/main.py --add "<task description>"
+python harness-runtime/main.py --add-file docs/tasks/task-001.md
+python harness-runtime/main.py --validate-task-doc docs/tasks/task-001.md
+python harness-runtime/main.py --queue
+python harness-runtime/main.py --queue-json
+python harness-runtime/main.py --status
+python harness-runtime/main.py --status-json
+python harness-runtime/main.py --cancel <task-id>
+python harness-runtime/main.py --skip <task-id>
+python harness-runtime/main.py --list
+python harness-runtime/main.py --resume <task-id>
+python harness-runtime/main.py --drain
+```
+
+Command intent:
+
+- `--add` enqueues a short inline task description
+- `--add-file` enqueues a validated markdown task document
+- `--validate-task-doc` checks a markdown task document without enqueueing it
+- `--queue` shows the queued task list in a human-readable table
+- `--queue-json` shows the same queue data in JSON for automation
+- `--status` shows the current worker snapshot in a human-readable report
+- `--status-json` shows the same status data in JSON for automation
+- `--cancel` and `--skip` operate on pending queued tasks
+- `--list` shows saved tasks across statuses
+- `--resume` restarts a saved task by id
+- `--drain` processes current pending tasks and exits
+
+Use `--queue-json` and `--status-json` for automation. The text commands are operator-facing views.
+
+## Inline Task Format
+
+Inline `--add` tasks are lightweight and best for short work items.
+
+A useful inline task should include:
 
 1. What to build or change
 2. The target language or stack
-3. Expected input/output behavior
-4. Any constraints that the implementation must respect
+3. Expected input and output behavior
+4. Important constraints or failure behavior
 
-## Recommended Template
+Recommended shape:
 
 ```text
 [Goal] one-sentence description
@@ -22,7 +65,7 @@ A good queue task should include:
 [Examples] optional sample input/output
 ```
 
-## Good Example
+Good example:
 
 ```text
 [Goal] Build a command-line calculator supporting +, -, *, /
@@ -32,7 +75,7 @@ A good queue task should include:
 [Constraints] Division by zero must print an error to stderr and exit non-zero
 ```
 
-## Bad Example
+Bad example:
 
 ```text
 make a calculator
@@ -41,37 +84,12 @@ make a calculator
 Why it is bad:
 
 - no language specified
-- no I/O contract
+- no input or output contract
 - no failure behavior
 
-## Queue Commands
+## Markdown Task Documents
 
-```bash
-python main.py --add "[Goal] ... [Language] ... [Input] ... [Output] ..."
-python main.py --add-file docs/tasks/task-001.md
-python main.py --queue
-python main.py --status
-python main.py --cancel <task-id>
-python main.py --skip <task-id>
-python main.py --drain
-python main.py --list
-```
-
-## Phase 1 Note
-
-Phase 1 implements a reliable drain worker. `--drain` processes all current pending tasks and exits. It is not yet a long-running daemon.
-
-## Status Snapshot Semantics
-
-`python main.py --status` reads `status.json` and reports:
-
-- `current_task_*`: the task running right now
-- `last_task_*`: the most recently completed task, preserved while the worker is idle
-- `last_event_*`: the latest lifecycle event only; phase 1 does not keep an event trail
-
-## Task Document Enqueue
-
-`python main.py --add-file <path>` accepts a markdown task document instead of a single inline string.
+`--add-file` accepts a markdown task document instead of a single inline string.
 
 Canonical template:
 
@@ -98,24 +116,56 @@ Minimum required sections:
 ready
 ```
 
-Optional sections such as `Scope`, `Constraints`, and `Open Questions` are also imported into the runtime task description.
+Common optional sections:
+
+- `Scope`
+- `Constraints`
+- `Open Questions`
+
+Only task documents with `Status: ready` should be enqueued.
+
+## Queue And Status Semantics
+
+`python harness-runtime/main.py --queue` reads `harness-runtime/task_queue.json` and shows the queued task list.
+
+`python harness-runtime/main.py --status` reads `harness-runtime/status.json` and reports the latest worker snapshot, including:
+
+- `current_task_*`: the task running right now
+- `last_task_*`: the most recently completed task, preserved while idle
+- `last_event_*`: the latest lifecycle event
+
+`--queue-json` and `--status-json` expose the same information in machine-readable JSON form.
+
+Consistent examples:
+
+```bash
+python harness-runtime/main.py --queue
+python harness-runtime/main.py --queue-json
+python harness-runtime/main.py --status
+python harness-runtime/main.py --status-json
+```
+
+`--queue` and `--queue-json` read `harness-runtime/task_queue.json`.
+
+`--status` and `--status-json` read `harness-runtime/status.json`.
 
 ## Supported Constraints
 
-`## Constraints` is the place to declare runtime-facing execution hints and limits.
+Declare runtime-facing execution hints and limits under `## Constraints`.
 
-Common keys:
+Global execution keys:
 
-- `harness`: selects a `harness-*` package, for example `harness-cpp`
-- `execution_mode`: `provider` or `cli`
-- `cli_command`: global CLI command template for all phases
-- `cli_timeout`: global CLI timeout in seconds
-- `provider`: global provider override
-- `model`: global model override
-- `api_key`: global API key override
-- `base_url`: global OpenAI-compatible base URL override
+- `harness`
+- `execution_mode`
+- `cli_command`
+- `cli_timeout`
+- `provider`
+- `model`
+- `api_key`
+- `base_url`
+- `user_agent`
 
-Phase-specific keys are also supported:
+Phase-specific execution keys:
 
 - `architect_execution_mode`
 - `architect_cli_command`
@@ -124,6 +174,7 @@ Phase-specific keys are also supported:
 - `architect_model`
 - `architect_api_key`
 - `architect_base_url`
+- `architect_user_agent`
 - `implementer_execution_mode`
 - `implementer_cli_command`
 - `implementer_cli_timeout`
@@ -131,6 +182,7 @@ Phase-specific keys are also supported:
 - `implementer_model`
 - `implementer_api_key`
 - `implementer_base_url`
+- `implementer_user_agent`
 - `tester_execution_mode`
 - `tester_cli_command`
 - `tester_cli_timeout`
@@ -138,18 +190,56 @@ Phase-specific keys are also supported:
 - `tester_model`
 - `tester_api_key`
 - `tester_base_url`
+- `tester_user_agent`
 
-Priority is:
+## Execution Backend Model
 
-1. phase-specific constraint
-2. global constraint
+Each phase resolves independently:
+
+- `architect`
+- `implementer`
+- `tester`
+
+Each phase supports two execution backends:
+
+- `provider`: provider-backed execution using provider, model, and API settings
+- `cli`: local command execution through a configured CLI template
+
+Resolution order for every phase:
+
+1. phase-specific task constraint
+2. global task constraint
 3. phase-specific environment variable
 4. global environment variable
 5. runtime default
 
-## CLI Mode Example
+The runtime default execution mode is `provider`.
 
-Use this when the model should be executed through a locally authenticated CLI rather than an API key:
+This applies independently to `architect`, `implementer`, and `tester`. A task can keep one phase on `provider` while routing another phase through `cli`.
+
+## CLI-Backed Execution
+
+Use CLI mode when a phase should run through a local executable such as `codex`.
+
+CLI timeout behavior:
+
+- `cli_timeout` defaults to `180` seconds if not set
+
+Supported placeholders:
+
+- `{prompt_file}`: runtime writes the full prompt to a temp file and substitutes the file path
+- `{prompt_content}`: runtime substitutes the full prompt text inline
+- `{output_file}`: runtime allocates a temp output file and substitutes the file path
+
+Validation and I/O rules:
+
+- if neither `{prompt_file}` nor `{prompt_content}` is present, prompt content is sent through stdin
+- a CLI command must accept prompt input through `{prompt_file}`, `{prompt_content}`, or stdin-style `-`
+- if `{output_file}` is configured, runtime reads the final output from that file
+- if `{output_file}` is not configured, runtime reads the final output from stdout
+- `codex exec -c approval_mode=full-auto -o {output_file} -` uses stdin fallback for prompt input and `{output_file}` for the final response
+
+Global Codex example:
 
 ```markdown
 ## Constraints
@@ -158,17 +248,39 @@ Use this when the model should be executed through a locally authenticated CLI r
 - cli_timeout: 240
 ```
 
-Supported CLI placeholders:
+Prompt-file example:
 
-- `{prompt_file}`
-- `{prompt_content}`
-- `{output_file}`
+```markdown
+## Constraints
+- execution_mode: cli
+- cli_command: some-cli --prompt-file {prompt_file} --output-file {output_file}
+```
 
-If the command uses none of the prompt placeholders, runtime sends the prompt via stdin.
+## Provider-Backed Execution
+
+Use provider mode when a phase should run through configured provider credentials and model settings.
+
+Global provider example:
+
+```markdown
+## Constraints
+- execution_mode: provider
+- provider: deepseek
+- model: deepseek-chat
+```
+
+Phase-specific provider example:
+
+```markdown
+## Constraints
+- tester_execution_mode: provider
+- tester_provider: deepseek
+- tester_model: deepseek-chat
+```
 
 ## Mixed Backend Example
 
-Use different backends per phase when needed:
+Use different backends per phase when needed.
 
 ```markdown
 ## Constraints
@@ -180,3 +292,12 @@ Use different backends per phase when needed:
 - tester_execution_mode: cli
 - tester_cli_command: codex exec -c approval_mode=full-auto -o {output_file} -
 ```
+
+This example keeps design generation on a provider-backed model while routing implementation and test phases through a CLI-backed Codex workflow.
+
+## Authoring Notes
+
+- prefer `--validate-task-doc` before `--add-file`
+- prefer `--queue-json` and `--status-json` when another system will parse the result
+- use phase-specific keys only when a phase needs to differ from the global execution configuration
+- keep examples anchored to `python harness-runtime/main.py` when documenting runtime commands from the repo root
