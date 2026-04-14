@@ -159,6 +159,9 @@ Global execution keys:
 - `execution_mode`
 - `cli_command`
 - `cli_timeout`
+- `workspace_dir`
+- `subtask_tester`
+- `subtask_tester_last_only`
 - `provider`
 - `model`
 - `api_key`
@@ -254,6 +257,37 @@ Prompt-file example:
 ## Constraints
 - execution_mode: cli
 - cli_command: some-cli --prompt-file {prompt_file} --output-file {output_file}
+```
+
+## Task Decomposition
+
+For complex tasks, the architect phase may output a `subtasks.json` file alongside `design.md`.
+When present, the runtime runs each subtask through its own architect → implementer → commit cycle.
+
+Decomposition constraints:
+
+- `workspace_dir`: path to a git repository where subtask code is committed. Defaults to the
+  sandbox directory (a temporary git repo is initialized automatically).
+- `subtask_tester`: set to `true` to run the tester phase after each subtask.
+- `subtask_tester_last_only`: set to `true` to run the tester only on the final subtask.
+  Takes precedence over `subtask_tester`.
+
+Example:
+
+```markdown
+## Constraints
+- workspace_dir: /path/to/my/project
+- subtask_tester_last_only: true
+- implementer_cli_timeout: 600
+```
+
+Commit message format per subtask:
+
+```
+[subtask 2/5] Implement calculation core
+
+acceptance_criteria: Addition, subtraction, multiplication, division work correctly.
+```
 ```
 
 ## Provider-Backed Execution
