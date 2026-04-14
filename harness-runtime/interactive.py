@@ -13,8 +13,10 @@ from status import update_status
 from task_queue import load_queue
 
 from runtime_support import (
+    commit_workspace_output,
     confirm,
     last_task_snapshot,
+    migrate_sandbox_output,
     monotonic_duration,
     now_str,
     print_banner,
@@ -305,4 +307,14 @@ def run_single_task_with_hooks(
         status_path=status_file,
     )
     save_memory_if_present_fn(user_input, report)
+
+    if not result.get("failed") and result["phase"] != "cancelled":
+        constraints = task_metadata.get("constraints") or {}
+        workspace_dir = constraints.get("workspace_dir", "").strip()
+        output_dir = constraints.get("output_dir", "").strip()
+        if workspace_dir:
+            commit_workspace_output(sandbox_dir, workspace_dir, user_input)
+        elif output_dir:
+            migrate_sandbox_output(sandbox_dir, output_dir)
+
     print(f"[HARNESS] Task ID: {thread_id}\n")

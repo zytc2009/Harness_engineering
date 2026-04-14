@@ -133,6 +133,33 @@ CLI_COMMAND=codex exec -c approval_mode=full-auto -o {output_file} -
 CLI_TIMEOUT=180
 ```
 
+## Output and Version Control
+
+After a successful pipeline run, generated files can be automatically delivered to a target directory.
+
+| Constraint | Behavior |
+|---|---|
+| `workspace_dir` | Copy files to the directory and create a git commit. Auto-inits a repo if none exists. |
+| `output_dir` | Copy files to the directory. No git operations. |
+
+`workspace_dir` takes precedence when both are set.
+
+### Git commit per task
+
+```markdown
+## Constraints
+- workspace_dir: ../my-project
+```
+
+The runtime commits all generated files with the message `feat: <task description>`.
+
+### Copy only
+
+```markdown
+## Constraints
+- output_dir: output/puzzle-game
+```
+
 The default CLI timeout is `180` seconds if no task or environment override is set.
 
 ### Mixed Per-Phase Example

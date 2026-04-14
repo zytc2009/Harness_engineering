@@ -10,6 +10,7 @@ from status import update_status
 from task_queue import load_queue, mark_stale_running_as_failed, next_pending, update_task as queue_update_task
 
 from runtime_support import (
+    commit_workspace_output,
     last_task_snapshot,
     migrate_sandbox_output,
     monotonic_duration,
@@ -248,8 +249,12 @@ def run_drain_with_hooks(
         save_memory_if_present_fn(user_input, result.get("tester_report", ""))
 
         if not failed:
-            output_dir = (task_metadata.get("constraints") or {}).get("output_dir", "").strip()
-            if output_dir:
+            constraints = task_metadata.get("constraints") or {}
+            workspace_dir = constraints.get("workspace_dir", "").strip()
+            output_dir = constraints.get("output_dir", "").strip()
+            if workspace_dir:
+                commit_workspace_output(sandbox_dir, workspace_dir, user_input)
+            elif output_dir:
                 migrate_sandbox_output(sandbox_dir, output_dir)
 
         print(f"[HARNESS] Task {final_status}: {thread_id}")

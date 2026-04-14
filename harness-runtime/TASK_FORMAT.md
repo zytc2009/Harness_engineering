@@ -160,6 +160,7 @@ Global execution keys:
 - `cli_command`
 - `cli_timeout`
 - `workspace_dir`
+- `output_dir`
 - `subtask_tester`
 - `subtask_tester_last_only`
 - `provider`
@@ -258,6 +259,50 @@ Prompt-file example:
 - execution_mode: cli
 - cli_command: some-cli --prompt-file {prompt_file} --output-file {output_file}
 ```
+
+## Output and Version Control
+
+After a successful pipeline run, the runtime can copy generated files out of the sandbox and optionally commit them to a git repository.
+
+Two constraints control this behavior:
+
+- `workspace_dir`: path to a git repository. Runtime copies all sandbox files there and creates one commit per task. If the directory does not contain a git repository, one is initialized automatically.
+- `output_dir`: path to any directory. Runtime copies all sandbox files there with no git involvement.
+
+Priority: `workspace_dir` takes precedence over `output_dir`. If both are set, only `workspace_dir` is used.
+
+Both paths are resolved relative to the directory where the runtime is invoked (the project root).
+
+### Using an existing git repository
+
+Create or clone a repository first, then point `workspace_dir` at it:
+
+```markdown
+## Constraints
+- workspace_dir: ../my-project
+```
+
+The runtime copies files and commits with the message `feat: <task description>`.
+
+### Using a fresh local repository
+
+If the directory does not exist or has no `.git`, the runtime initializes one:
+
+```markdown
+## Constraints
+- workspace_dir: output/puzzle-game
+```
+
+A local-only repository is created. Connect a remote later with `git remote add origin <url> && git push -u origin main`.
+
+### Copy only, no git
+
+```markdown
+## Constraints
+- output_dir: output/puzzle-game
+```
+
+Files are copied but no git operations are performed.
 
 ## Task Decomposition
 

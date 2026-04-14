@@ -140,23 +140,52 @@ def save_memory_if_present(user_input: str, tester_report: str) -> None:
     print(f"[HARNESS] Memory saved: {summary}\n")
 
 
-def migrate_sandbox_output(sandbox_dir: Path, output_dir_raw: str) -> None:
-    """Copy all sandbox files to output_dir after a successful pipeline run."""
-    output_dir = Path(output_dir_raw)
-    if not output_dir.is_absolute():
-        output_dir = Path.cwd() / output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _copy_sandbox_files(sandbox_dir: Path, dest_dir: Path) -> list[str]:
+    """Copy all files from sandbox_dir to dest_dir. Returns list of copied filenames."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
     copied = []
     for src in sorted(sandbox_dir.iterdir()):
         if src.is_file():
-            shutil.copy2(src, output_dir / src.name)
+            shutil.copy2(src, dest_dir / src.name)
             copied.append(src.name)
+    return copied
+
+
+def migrate_sandbox_output(sandbox_dir: Path, output_dir_raw: str) -> None:
+    """Copy all sandbox files to output_dir (no git)."""
+    output_dir = Path(output_dir_raw)
+    if not output_dir.is_absolute():
+        output_dir = Path.cwd() / output_dir
+    copied = _copy_sandbox_files(sandbox_dir, output_dir)
     if copied:
         print(f"\n[HARNESS] Output → {output_dir}")
         for name in copied:
             print(f"  {name}")
     else:
         print(f"\n[HARNESS] migrate: sandbox is empty, nothing to copy")
+
+
+def commit_workspace_output(sandbox_dir: Path, workspace_dir_raw: str, description: str) -> str:
+    """Copy sandbox files to workspace_dir, git-init if needed, and commit.
+
+    Returns the new HEAD SHA (empty string if sandbox was empty).
+    """
+    import git_ops
+
+    workspace = Path(workspace_dir_raw)
+    if not workspace.is_absolute():
+        workspace = Path.cwd() / workspace
+    git_ops.ensure_git_repo(workspace)
+    copied = _copy_sandbox_files(sandbox_dir, workspace)
+    if not copied:
+        print(f"\n[HARNESS] commit: sandbox is empty, nothing to commit")
+        return ""
+    short_desc = description[:72].strip() if description else "harness task"
+    sha = git_ops.commit_subtask(workspace, copied, f"feat: {short_desc}")
+    print(f"\n[HARNESS] Committed → {workspace} ({sha[:8]})")
+    for name in copied:
+        print(f"  {name}")
+    return sha
 
 
 def status_callback_for_task(queue_file: Path, status_file: Path, thread_id: str, description: str, max_retries: int):
