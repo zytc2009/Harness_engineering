@@ -52,8 +52,43 @@ Every design document MUST include an `## I/O Contract` section that specifies:
 
 The tester writes tests based solely on this contract.
 
-Output Format:
-Write your full design as a markdown document inside a fenced block, then state `DESIGN COMPLETE` on its own line.
+## Task Decomposition (for complex tasks)
+
+If the task requires more than one implementer call to complete, output a `subtasks.json` file
+that breaks implementation into 2–10 ordered subtasks. Each subtask must be completable in a
+single implementer call. For simple tasks, omit `subtasks.json`.
+
+subtasks.json schema (each entry):
+- id: integer starting from 1
+- title: short imperative title
+- description: what to implement in this subtask (multi-sentence natural language)
+- files: list of filenames the implementer must produce
+- acceptance_criteria: how to verify this subtask is correct (multi-sentence natural language)
+
+## Output Format
+
+Output each file using this exact format:
+
+## FILE: design.md
+```markdown
+...full design document...
+```
+
+## FILE: subtasks.json
+```json
+[
+  {
+    "id": 1,
+    "title": "...",
+    "description": "...",
+    "files": ["..."],
+    "acceptance_criteria": "..."
+  }
+]
+```
+
+Omit the subtasks.json block entirely for simple single-call tasks.
+State `DESIGN COMPLETE` on its own line after all file blocks.
 """
 
 _IMPLEMENTER_PROMPT = """## Your Role: Implementer
