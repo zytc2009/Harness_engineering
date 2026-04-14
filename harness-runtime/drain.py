@@ -11,6 +11,7 @@ from task_queue import load_queue, mark_stale_running_as_failed, next_pending, u
 
 from runtime_support import (
     last_task_snapshot,
+    migrate_sandbox_output,
     monotonic_duration,
     now_str,
     print_banner,
@@ -245,6 +246,12 @@ def run_drain_with_hooks(
         )
 
         save_memory_if_present_fn(user_input, result.get("tester_report", ""))
+
+        if not failed:
+            output_dir = (task_metadata.get("constraints") or {}).get("output_dir", "").strip()
+            if output_dir:
+                migrate_sandbox_output(sandbox_dir, output_dir)
+
         print(f"[HARNESS] Task {final_status}: {thread_id}")
         if failed:
             print("[HARNESS] Moving to next task...")

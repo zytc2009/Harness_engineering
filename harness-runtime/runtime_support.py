@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -139,7 +140,28 @@ def save_memory_if_present(user_input: str, tester_report: str) -> None:
     print(f"[HARNESS] Memory saved: {summary}\n")
 
 
+def migrate_sandbox_output(sandbox_dir: Path, output_dir_raw: str) -> None:
+    """Copy all sandbox files to output_dir after a successful pipeline run."""
+    output_dir = Path(output_dir_raw)
+    if not output_dir.is_absolute():
+        output_dir = Path.cwd() / output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for src in sorted(sandbox_dir.iterdir()):
+        if src.is_file():
+            shutil.copy2(src, output_dir / src.name)
+            copied.append(src.name)
+    if copied:
+        print(f"\n[HARNESS] Output → {output_dir}")
+        for name in copied:
+            print(f"  {name}")
+    else:
+        print(f"\n[HARNESS] migrate: sandbox is empty, nothing to copy")
+
+
 def status_callback_for_task(queue_file: Path, status_file: Path, thread_id: str, description: str, max_retries: int):
+    _phase_start: dict[str, float] = {}
+
     def callback(event: dict) -> None:
         pending, running, done, failed, cancelled, skipped = queue_snapshot(queue_file)
         last_task_id, last_task_description, last_task_finished_at = last_task_snapshot(status_file)
@@ -148,6 +170,16 @@ def status_callback_for_task(queue_file: Path, status_file: Path, thread_id: str
         retry_count = event.get("retry_count", 0)
         error = event.get("error")
         message = event.get("message")
+
+        tag = f"[{description[:20]}]" if description else "[task]"
+        now = time.monotonic()
+        if event_type == "phase_started" and phase:
+            _phase_start[phase] = now
+        elif event_type == "phase_finished" and phase:
+            elapsed = now - _phase_start.get(phase, now)
+            print(f"[HARNESS] {tag} ✓ {phase} ({elapsed:.1f}s)")
+        elif event_type == "retrying":
+            print(f"[HARNESS] {tag} ↻ retry {retry_count}/{max_retries}")
 
         worker_state = "running"
         task_state = "running"
