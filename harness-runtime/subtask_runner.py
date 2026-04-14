@@ -135,6 +135,7 @@ def _run_subtask(
                 retry_count=retry_count, commit_sha=commit_sha,
                 error=tester_report[:200],
             )
+        continue  # restart loop: re-run architect + implementer with tester feedback
 
 
 def _try_commit(
