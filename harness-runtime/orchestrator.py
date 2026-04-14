@@ -96,7 +96,7 @@ def architect_phase(
     else:
         md = re.search(r"```(?:markdown|md)?\n(.*?)```", text, re.DOTALL)
         design = md.group(1).strip() if md else text
-        _write_sandbox({"design.md": design}, sandbox_dir=sandbox_dir)
+        _write_sandbox({**files, "design.md": design}, sandbox_dir=sandbox_dir)
 
     print(f"  -> design.md written ({len(design)} chars)")
     if "subtasks.json" in files:
