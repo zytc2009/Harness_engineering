@@ -509,6 +509,7 @@ class TestRunPipelineDecomposed:
             return "# design"
 
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", side_effect=fake_architect),
             patch("orchestrator.run_subtasks", return_value=[]) as mock_runner,
         ):
@@ -519,6 +520,7 @@ class TestRunPipelineDecomposed:
 
     def test_falls_through_to_single_pipeline_when_no_subtasks(self, tmp_path):
         with (
+            patch("orchestrator.execution.validate_runtime"),
             patch("orchestrator.architect_phase", return_value="# design"),
             patch("orchestrator.implementer_phase", return_value={"f.py": "x=1"}),
             patch("orchestrator.tester_phase", return_value=(True, "ok")),

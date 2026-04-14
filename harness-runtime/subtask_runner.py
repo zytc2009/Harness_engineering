@@ -10,8 +10,9 @@ import git_ops
 import orchestrator as _orchestrator
 
 
-# Module-level aliases so tests can patch subtask_runner.architect_phase etc.
-# These delegate to _orchestrator at call time, avoiding circular-import issues.
+# Proxy wrappers to break the circular import (orchestrator ↔ subtask_runner).
+# Tests patch these names at the subtask_runner module level, so the body is
+# never executed in tests — hence pragma: no cover.
 def architect_phase(*args, **kwargs):  # pragma: no cover
     return _orchestrator.architect_phase(*args, **kwargs)
 
