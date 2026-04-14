@@ -1,16 +1,20 @@
 """Tests for the one-shot pipeline orchestrator."""
 
+import json
 import logging
 import sys
 import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orchestrator import _parse_files, architect_phase, implementer_phase
 from orchestrator import tester_phase as _tester_phase
 from orchestrator import run_pipeline
+from orchestrator import _load_subtasks, _build_decomposed_result
 
 
 class TestParseFiles:
@@ -425,3 +429,72 @@ class TestReadSandbox:
 
         assert result == {"good.txt": "ok"}
         assert f"Failed to read sandbox file {bad}" in caplog.text
+
+
+class TestLoadSubtasks:
+    def test_returns_none_when_file_absent(self, tmp_path):
+        assert _load_subtasks(tmp_path) is None
+
+    def test_returns_list_when_valid(self, tmp_path):
+        data = [{"id": 1, "title": "t", "description": "d", "files": ["a.py"], "acceptance_criteria": "x"}]
+        (tmp_path / "subtasks.json").write_text(json.dumps(data), encoding="utf-8")
+        result = _load_subtasks(tmp_path)
+        assert result == data
+
+    def test_raises_on_malformed_json(self, tmp_path):
+        (tmp_path / "subtasks.json").write_text("{not valid json", encoding="utf-8")
+        with pytest.raises(ValueError, match="malformed"):
+            _load_subtasks(tmp_path)
+
+    def test_raises_when_not_a_list(self, tmp_path):
+        (tmp_path / "subtasks.json").write_text('{"key": "value"}', encoding="utf-8")
+        with pytest.raises(ValueError, match="must be a JSON array"):
+            _load_subtasks(tmp_path)
+
+
+class TestBuildDecomposedResult:
+    def _make_result(self, subtask_id, title, status, commit_sha="abc123", error=""):
+        from subtask_runner import SubtaskResult
+        return SubtaskResult(
+            subtask_id=subtask_id, title=title, status=status,
+            retry_count=0, commit_sha=commit_sha, error=error,
+        )
+
+    def test_all_passed_returns_not_failed(self):
+        results = [
+            self._make_result(1, "t1", "passed"),
+            self._make_result(2, "t2", "passed"),
+        ]
+        out = _build_decomposed_result(results)
+        assert out["phase"] == "done"
+        assert not out.get("failed")
+
+    def test_some_skipped_not_all_passes(self):
+        results = [
+            self._make_result(1, "t1", "passed"),
+            self._make_result(2, "t2", "skipped", commit_sha="", error="tester failed"),
+        ]
+        out = _build_decomposed_result(results)
+        assert out["phase"] == "done"
+        assert not out.get("failed")  # not ALL skipped
+
+    def test_all_skipped_marks_failed(self):
+        results = [
+            self._make_result(1, "t1", "skipped", commit_sha="", error="no files"),
+            self._make_result(2, "t2", "skipped", commit_sha="", error="tester failed"),
+        ]
+        out = _build_decomposed_result(results)
+        assert out["failed"] is True
+
+    def test_skip_report_in_tester_report(self):
+        results = [
+            self._make_result(2, "bad subtask", "skipped", commit_sha="", error="no FILE blocks"),
+        ]
+        out = _build_decomposed_result(results)
+        assert "[2]" in out["tester_report"]
+        assert "bad subtask" in out["tester_report"]
+
+    def test_subtask_results_included(self):
+        results = [self._make_result(1, "t1", "passed", commit_sha="deadbeef")]
+        out = _build_decomposed_result(results)
+        assert out["subtask_results"][0]["commit_sha"] == "deadbeef"

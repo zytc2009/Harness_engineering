@@ -11,6 +11,7 @@ Flow:
   If tests fail -> retry implementer (with failure feedback) -> up to max_retries
 """
 
+import json
 import os
 import re
 import subprocess
@@ -75,6 +76,46 @@ def _read_sandbox(sandbox_dir: str | Path | None = None) -> dict[str, str]:
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("Failed to read sandbox file %s: %s", path, exc)
     return result
+
+
+def _load_subtasks(sandbox_dir: str | Path | None = None) -> list[dict] | None:
+    """Read subtasks.json from sandbox. Returns None if absent, raises ValueError if malformed."""
+    target_dir = _resolve_sandbox_dir(sandbox_dir)
+    path = target_dir / "subtasks.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"subtasks.json is malformed: {exc}") from exc
+    if not isinstance(data, list):
+        raise ValueError("subtasks.json must be a JSON array")
+    return data
+
+
+def _build_decomposed_result(results: list) -> dict:
+    """Build the final pipeline result dict from a list of SubtaskResult."""
+    skipped = [r for r in results if r.status == "skipped"]
+    all_skipped = len(skipped) == len(results)
+    skip_report = "\n".join(
+        f"[{r.subtask_id}] {r.title} — {r.error}" for r in skipped
+    )
+    return {
+        "phase": "done",
+        "failed": all_skipped,
+        "retry_count": sum(r.retry_count for r in results),
+        "tester_report": skip_report,
+        "subtask_results": [
+            {
+                "id": r.subtask_id,
+                "title": r.title,
+                "status": r.status,
+                "commit_sha": r.commit_sha,
+                "error": r.error,
+            }
+            for r in results
+        ],
+    }
 
 
 def architect_phase(
