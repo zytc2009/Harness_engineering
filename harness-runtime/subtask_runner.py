@@ -7,7 +7,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import git_ops
-from orchestrator import architect_phase, implementer_phase, tester_phase
+import orchestrator as _orchestrator
+
+
+# Module-level aliases so tests can patch subtask_runner.architect_phase etc.
+# These delegate to _orchestrator at call time, avoiding circular-import issues.
+def architect_phase(*args, **kwargs):  # pragma: no cover
+    return _orchestrator.architect_phase(*args, **kwargs)
+
+
+def implementer_phase(*args, **kwargs):  # pragma: no cover
+    return _orchestrator.implementer_phase(*args, **kwargs)
+
+
+def tester_phase(*args, **kwargs):  # pragma: no cover
+    return _orchestrator.tester_phase(*args, **kwargs)
 
 logger = logging.getLogger(__name__)
 

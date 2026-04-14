@@ -27,6 +27,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import config
 import execution
 from prompts import get_system_prompt
+from subtask_runner import run_subtasks
 
 SANDBOX = Path(tempfile.gettempdir()) / "harness_sandbox"
 SANDBOX.mkdir(exist_ok=True)
@@ -403,6 +404,22 @@ def run_pipeline(
             return {"phase": "cancelled", "retry_count": 0, "tester_report": ""}
         design = result
         emit("phase_finished", "architect", message="architect finished")
+
+        # Decomposed path: delegate to subtask_runner if architect produced subtasks.json
+        subtasks = _load_subtasks(target_dir)
+        if subtasks:
+            workspace_dir = (((task_metadata or {}).get("constraints") or {})).get("workspace_dir") or None
+            results = run_subtasks(
+                task=task,
+                design=design,
+                subtasks=subtasks,
+                sandbox_dir=target_dir,
+                workspace_dir=workspace_dir,
+                max_retries=max_retries,
+                on_status=on_status,
+                task_metadata=task_metadata,
+            )
+            return _build_decomposed_result(results)
     else:
         existing = _read_sandbox(target_dir)
         design = existing.get("design.md", "")

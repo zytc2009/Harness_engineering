@@ -498,3 +498,31 @@ class TestBuildDecomposedResult:
         results = [self._make_result(1, "t1", "passed", commit_sha="deadbeef")]
         out = _build_decomposed_result(results)
         assert out["subtask_results"][0]["commit_sha"] == "deadbeef"
+
+
+class TestRunPipelineDecomposed:
+    def test_delegates_to_subtask_runner_when_subtasks_present(self, tmp_path):
+        subtasks = [{"id": 1, "title": "t", "description": "d", "files": ["f.py"], "acceptance_criteria": "x"}]
+
+        def fake_architect(task, sandbox_dir=None, task_metadata=None):
+            (Path(sandbox_dir) / "subtasks.json").write_text(json.dumps(subtasks), encoding="utf-8")
+            return "# design"
+
+        with (
+            patch("orchestrator.architect_phase", side_effect=fake_architect),
+            patch("orchestrator.run_subtasks", return_value=[]) as mock_runner,
+        ):
+            result = run_pipeline("big task", sandbox_dir=tmp_path)
+
+        mock_runner.assert_called_once()
+        assert result["phase"] == "done"
+
+    def test_falls_through_to_single_pipeline_when_no_subtasks(self, tmp_path):
+        with (
+            patch("orchestrator.architect_phase", return_value="# design"),
+            patch("orchestrator.implementer_phase", return_value={"f.py": "x=1"}),
+            patch("orchestrator.tester_phase", return_value=(True, "ok")),
+        ):
+            result = run_pipeline("small task", sandbox_dir=tmp_path)
+        assert result["phase"] == "done"
+        assert "subtask_results" not in result
