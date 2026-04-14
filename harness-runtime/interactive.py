@@ -20,7 +20,9 @@ from runtime_support import (
     monotonic_duration,
     now_str,
     print_banner,
+    print_cli_log,
     print_design_preview,
+    print_task_log,
     queue_snapshot,
     queue_upsert_execution_task,
     save_memory_if_present,
@@ -39,23 +41,23 @@ def choose_interactive_task(queue_file: Path) -> tuple[str, str, str]:
 
     incomplete = incomplete_tasks(queue_file)
     if incomplete:
-        print(f"\n[HARNESS] Found {len(incomplete)} incomplete task(s):")
+        print(f"\n[CLI] Found {len(incomplete)} incomplete task(s):")
         for index, task in enumerate(incomplete, 1):
             print(f"  [{index}] {task['id'][:8]}...  {task['updated']}  {task['description']}")
         print("  [N] Start a new task")
         choice = input("\nResume which? (1/2/.../N): ").strip().upper()
         if choice.isdigit() and 1 <= int(choice) <= len(incomplete):
             picked = incomplete[int(choice) - 1]
-            print(f"\n[HARNESS] Resuming: {picked['description']}")
+            print_cli_log(f"Resuming: {picked['description']} ({picked['id'][:8]})")
             return picked["id"], picked["description"], "implementer"
 
     thread_id = str(uuid.uuid4())
     memories = load_memories()
     if memories:
-        print(f"[HARNESS] Found {len(memories)} memory record(s).")
+        print_cli_log(f"Found {len(memories)} memory record(s).")
         print(f"          Last: {memories[-1]['date']} - {memories[-1]['summary'][:60]}...")
     else:
-        print("[HARNESS] No long-term memory found. Starting fresh.")
+        print_cli_log("No long-term memory found. Starting fresh.")
     print("\nDescribe your task:")
     user_input = input("Task: ").strip()
     return thread_id, user_input, start_phase
@@ -141,7 +143,7 @@ def run_single_task_with_hooks(
             architect_phase_fn(user_input, sandbox_dir=sandbox_dir, task_metadata=task_metadata)
             print_design_preview_fn(sandbox_dir)
             if not confirm_fn("  Proceed with implementation? (yes/no): "):
-                print("  [HARNESS] Implementation cancelled.")
+                print_task_log("Implementation cancelled.", thread_id, "architect")
                 queue_upsert_execution_task(queue_file, thread_id, user_input, "failed", phase="cancelled", error="cancelled")
                 pending, running, done, failed, cancelled, skipped = queue_snapshot(queue_file)
                 update_status(
@@ -169,7 +171,8 @@ def run_single_task_with_hooks(
                 return
             start_phase = "implementer"
 
-        print("\n[HARNESS] Starting pipeline...\n")
+        print_task_log("Starting pipeline...", thread_id, start_phase)
+        print()
         result = run_pipeline_fn(
             task=user_input,
             start_phase=start_phase,
@@ -179,7 +182,8 @@ def run_single_task_with_hooks(
         )
     except KeyboardInterrupt:
         duration = monotonic_duration(started)
-        print("\n\n[HARNESS] Interrupted.")
+        print()
+        print_cli_log("Interrupted.")
         queue_upsert_execution_task(
             queue_file,
             thread_id,
@@ -212,11 +216,12 @@ def run_single_task_with_hooks(
             error="KeyboardInterrupt",
             status_path=status_file,
         )
-        print(f"[HARNESS] Resume with: python main.py --resume {thread_id}\n")
+        print_cli_log(f"Resume with: python main.py --resume {thread_id}")
+        print()
         return
     except Exception as exc:
         duration = monotonic_duration(started)
-        print(f"\n[HARNESS] Error: {exc}")
+        print_cli_log(f"Error: {exc}")
         queue_upsert_execution_task(queue_file, thread_id, user_input, "failed", duration_s=duration, error=str(exc)[:200])
         pending, running, done, failed, cancelled, skipped = queue_snapshot(queue_file)
         update_status(
@@ -248,11 +253,11 @@ def run_single_task_with_hooks(
     print("  FINAL RESPONSE")
     print("=" * 55)
     if result.get("failed"):
-        print("Tests did not pass after all retries.")
+        print_task_log("Tests did not pass after all retries.", thread_id, result["phase"])
     elif result["phase"] == "cancelled":
-        print("Task cancelled by user.")
+        print_task_log("Task cancelled by user.", thread_id, result["phase"])
     else:
-        print("Pipeline complete.")
+        print_task_log("Pipeline complete.", thread_id, result["phase"])
 
     report = result.get("tester_report", "")
     if report:
@@ -317,4 +322,5 @@ def run_single_task_with_hooks(
         elif output_dir:
             migrate_sandbox_output(sandbox_dir, output_dir)
 
-    print(f"[HARNESS] Task ID: {thread_id}\n")
+    print_task_log("Task complete.", thread_id, result["phase"])
+    print()

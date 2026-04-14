@@ -22,6 +22,23 @@ def task_sandbox_dir(task_id: str, sandbox_root: Path = SANDBOX) -> Path:
     return sandbox_root / task_id
 
 
+def task_log_prefix(task_id: str | None = None, phase: str | None = None) -> str:
+    parts = ["[TASK]"]
+    if task_id:
+        parts[0] = f"[TASK {task_id[:8]}]"
+    if phase:
+        parts.append(f"[{phase}]")
+    return "".join(parts)
+
+
+def print_task_log(message: str, task_id: str | None = None, phase: str | None = None) -> None:
+    print(f"{task_log_prefix(task_id, phase)} {message}")
+
+
+def print_cli_log(message: str) -> None:
+    print(f"[CLI] {message}")
+
+
 def queue_snapshot(queue_file: Path) -> tuple[int, int, int, int, int, int]:
     return queue_counts(queue_file)
 
@@ -96,7 +113,7 @@ def queue_upsert_execution_task(
 
 def print_banner(thread_id: str, sandbox_dir: Path | None = None, task_metadata: dict | None = None) -> None:
     print("=" * 55)
-    print("  Harness Runtime - Pipeline")
+    print(f"  Harness Runtime - Pipeline [{thread_id[:8]}]")
     for phase in ("architect", "implementer", "tester"):
         descriptor = execution.describe_phase_execution(phase, task_metadata=task_metadata)
         print(f"  {phase.capitalize():<12}: {descriptor}")
@@ -123,7 +140,7 @@ def print_design_preview(sandbox_dir: Path) -> None:
         return
     lines = design.strip().splitlines()
     preview = "\n  ".join(lines[:20])
-    print(f"\n[HARNESS] Architect's plan:\n  {preview}")
+    print(f"\n{task_log_prefix(phase='architect')} Architect's plan:\n  {preview}")
     if len(lines) > 20:
         print(f"  ... ({len(lines) - 20} more lines - see design.md in sandbox)")
     print("\n" + "=" * 55)
@@ -132,12 +149,13 @@ def print_design_preview(sandbox_dir: Path) -> None:
 def save_memory_if_present(user_input: str, tester_report: str) -> None:
     if not tester_report:
         return
-    print("\n[HARNESS] Extracting long-term memory...")
+    print_cli_log("Extracting long-term memory...")
     from langchain_core.messages import AIMessage, HumanMessage
 
     messages = [HumanMessage(content=user_input), AIMessage(content=tester_report)]
     summary = extract_and_save_memory(messages, user_input)
-    print(f"[HARNESS] Memory saved: {summary}\n")
+    print_cli_log(f"Memory saved: {summary}")
+    print()
 
 
 def _copy_sandbox_files(sandbox_dir: Path, dest_dir: Path) -> list[str]:
@@ -158,11 +176,11 @@ def migrate_sandbox_output(sandbox_dir: Path, output_dir_raw: str) -> None:
         output_dir = Path.cwd() / output_dir
     copied = _copy_sandbox_files(sandbox_dir, output_dir)
     if copied:
-        print(f"\n[HARNESS] Output → {output_dir}")
+        print_task_log(f"Output -> {output_dir}")
         for name in copied:
             print(f"  {name}")
     else:
-        print(f"\n[HARNESS] migrate: sandbox is empty, nothing to copy")
+        print_task_log("migrate: sandbox is empty, nothing to copy")
 
 
 def commit_workspace_output(sandbox_dir: Path, workspace_dir_raw: str, description: str) -> str:
@@ -178,11 +196,11 @@ def commit_workspace_output(sandbox_dir: Path, workspace_dir_raw: str, descripti
     git_ops.ensure_git_repo(workspace)
     copied = _copy_sandbox_files(sandbox_dir, workspace)
     if not copied:
-        print(f"\n[HARNESS] commit: sandbox is empty, nothing to commit")
+        print_task_log("commit: sandbox is empty, nothing to commit")
         return ""
     short_desc = description[:72].strip() if description else "harness task"
     sha = git_ops.commit_subtask(workspace, copied, f"feat: {short_desc}")
-    print(f"\n[HARNESS] Committed → {workspace} ({sha[:8]})")
+    print_task_log(f"Committed -> {workspace} ({sha[:8]})")
     for name in copied:
         print(f"  {name}")
     return sha
@@ -204,11 +222,12 @@ def status_callback_for_task(queue_file: Path, status_file: Path, thread_id: str
         now = time.monotonic()
         if event_type == "phase_started" and phase:
             _phase_start[phase] = now
+            print_task_log(f"{tag} started", thread_id, phase)
         elif event_type == "phase_finished" and phase:
             elapsed = now - _phase_start.get(phase, now)
-            print(f"[HARNESS] {tag} ✓ {phase} ({elapsed:.1f}s)")
+            print_task_log(f"{tag} ✓ ({elapsed:.1f}s)", thread_id, phase)
         elif event_type == "retrying":
-            print(f"[HARNESS] {tag} ↻ retry {retry_count}/{max_retries}")
+            print_task_log(f"{tag} ↻ retry {retry_count}/{max_retries}", thread_id, phase)
 
         worker_state = "running"
         task_state = "running"

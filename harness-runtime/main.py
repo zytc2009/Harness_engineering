@@ -38,7 +38,7 @@ from queue_cli import (
     show_status as queue_show_status,
     show_status_json as queue_show_status_json,
 )
-from runtime_support import print_banner
+from runtime_support import print_banner, print_cli_log
 from task_doc import TaskDocValidationError, validate_task_doc as runtime_validate_task_doc
 from task_queue import load_queue
 
@@ -49,12 +49,13 @@ _STATUS_FILE = Path(__file__).parent / "task" / "status.json"
 def _save_memory_if_present(user_input: str, tester_report: str) -> None:
     if not tester_report:
         return
-    print("\n[HARNESS] Extracting long-term memory...")
+    print_cli_log("Extracting long-term memory...")
     from langchain_core.messages import AIMessage, HumanMessage
 
     messages = [HumanMessage(content=user_input), AIMessage(content=tester_report)]
     summary = extract_and_save_memory(messages, user_input)
-    print(f"[HARNESS] Memory saved: {summary}\n")
+    print_cli_log(f"Memory saved: {summary}")
+    print()
 
 
 def list_tasks() -> None:
@@ -71,7 +72,7 @@ def handle_add_file(doc_path: str, max_retries: int = 3) -> str:
 
 def handle_validate_task_doc(doc_path: str) -> None:
     resolved_path, sections, constraints = runtime_validate_task_doc(doc_path)
-    print(f"[HARNESS] Task document is valid: {resolved_path}")
+    print_cli_log(f"Task document is valid: {resolved_path}")
     print(f"  Required sections: {', '.join(name for name in sections if sections.get(name))}")
     print(f"  Constraints: {len(constraints)} parsed")
 
@@ -208,7 +209,7 @@ def main() -> None:
         if not match:
             print(f"[ERROR] Thread '{args.resume}' not found. Use --list to see saved tasks.")
             sys.exit(1)
-        print(f"\n[HARNESS] Resuming task: {match['description']}")
+        print_cli_log(f"Resuming task: {match['description']} ({args.resume[:8]})")
         _run_single_task(args.resume, match["description"], "implementer", max_retries)
         return
 

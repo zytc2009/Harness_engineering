@@ -10,7 +10,7 @@ from task_doc import load_task_doc
 from task_queue import add_task as queue_add_task
 from task_queue import cancel_task, list_queue, load_queue, skip_task
 
-from runtime_support import last_task_snapshot, queue_snapshot
+from runtime_support import last_task_snapshot, print_cli_log, queue_snapshot
 
 
 def list_tasks(queue_file: Path) -> None:
@@ -56,7 +56,7 @@ def handle_add(description: str, max_retries: int, queue_file: Path, status_file
         last_task_finished_at=last_task_finished_at,
         status_path=status_file,
     )
-    print(f"[HARNESS] Task added: {task_id}")
+    print_cli_log(f"Task added: {task_id}")
     print(f"  Description: {description}")
     print("  Run 'python main.py --drain' to process queued tasks.")
     return task_id
@@ -93,7 +93,7 @@ def handle_add_file(doc_path: str, max_retries: int, queue_file: Path, status_fi
         last_task_finished_at=last_task_finished_at,
         status_path=status_file,
     )
-    print(f"[HARNESS] Task added from doc: {task_id}")
+    print_cli_log(f"Task added from doc: {task_id}")
     print(f"  Source: {resolved_doc_path}")
     print("  Run 'python main.py --drain' to process queued tasks.")
     return task_id
@@ -101,7 +101,7 @@ def handle_add_file(doc_path: str, max_retries: int, queue_file: Path, status_fi
 
 def handle_cancel(task_id: str, queue_file: Path, status_file: Path) -> None:
     cancel_task(task_id, queue_file)
-    print(f"[HARNESS] Task cancelled: {task_id}")
+    print_cli_log(f"Task cancelled: {task_id}")
     pending, running, done, failed, cancelled, skipped = queue_snapshot(queue_file)
     last_task_id, last_task_description, last_task_finished_at = last_task_snapshot(status_file)
     update_status(
@@ -127,7 +127,7 @@ def handle_cancel(task_id: str, queue_file: Path, status_file: Path) -> None:
 
 def handle_skip(task_id: str, queue_file: Path, status_file: Path) -> None:
     skip_task(task_id, queue_file)
-    print(f"[HARNESS] Task skipped: {task_id}")
+    print_cli_log(f"Task skipped: {task_id}")
     pending, running, done, failed, cancelled, skipped = queue_snapshot(queue_file)
     last_task_id, last_task_description, last_task_finished_at = last_task_snapshot(status_file)
     update_status(
@@ -154,22 +154,13 @@ def handle_skip(task_id: str, queue_file: Path, status_file: Path) -> None:
 def show_status(status_file: Path) -> None:
     data = read_status(status_file)
     if data is None:
-        print("[HARNESS] No status available. Worker has not run yet.")
+        print("[CLI] No status available. Worker has not run yet.")
         return
     print("\n" + "=" * 55)
-    print("  HARNESS STATUS")
+    print("  RUNTIME STATUS")
     print("=" * 55)
+    print("  [CLI]")
     print(f"  Worker      : {data.get('worker_state', 'unknown')}")
-    print(f"  Task State  : {data.get('task_state', '-')}")
-    if data.get("current_task_id"):
-        print(f"  Task ID     : {data['current_task_id']}")
-        print(f"  Description : {data.get('current_task_description', '-')}")
-        print(f"  Phase       : {data.get('phase', '-')}")
-        print(f"  Retries     : {data.get('retry_count', 0)}/{data.get('max_retries', 3)}")
-    elif data.get("last_task_id"):
-        print(f"  Last Task   : {data['last_task_id']}")
-        print(f"  Last Desc   : {data.get('last_task_description', '-')}")
-        print(f"  Last Done   : {data.get('last_task_finished_at', '-')}")
     print(
         f"  Queue       : {data.get('queue_pending', 0)} pending, "
         f"{data.get('queue_running', 0)} running, "
@@ -185,6 +176,18 @@ def show_status(status_file: Path) -> None:
     if data.get("error"):
         print(f"  Error       : {data['error']}")
     print(f"  Updated     : {data.get('updated', '-')}")
+
+    print("  [TASK]")
+    print(f"  Task State  : {data.get('task_state', '-')}")
+    if data.get("current_task_id"):
+        print(f"  Task ID     : {data['current_task_id']}")
+        print(f"  Description : {data.get('current_task_description', '-')}")
+        print(f"  Phase       : {data.get('phase', '-')}")
+        print(f"  Retries     : {data.get('retry_count', 0)}/{data.get('max_retries', 3)}")
+    elif data.get("last_task_id"):
+        print(f"  Last Task   : {data['last_task_id']}")
+        print(f"  Last Desc   : {data.get('last_task_description', '-')}")
+        print(f"  Last Done   : {data.get('last_task_finished_at', '-')}")
     print("=" * 55 + "\n")
 
 
@@ -197,7 +200,7 @@ def show_status_json(status_file: Path) -> None:
 def print_queue(queue_file: Path) -> None:
     queue = list_queue(queue_file)
     if not queue:
-        print("[HARNESS] Queue is empty.")
+        print("[CLI] Queue is empty.")
         return
     print(f"\n{'ID':<36}  {'Status':<10}  {'Created':<19}  Description")
     print("-" * 110)

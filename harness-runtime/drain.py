@@ -16,6 +16,8 @@ from runtime_support import (
     monotonic_duration,
     now_str,
     print_banner,
+    print_cli_log,
+    print_task_log,
     queue_snapshot,
     queue_upsert_execution_task,
     save_memory_if_present,
@@ -41,13 +43,13 @@ def run_drain_with_hooks(
 ) -> None:
     repaired = mark_stale_running_as_failed(queue_file)
     if repaired:
-        print(f"[HARNESS] Recovered {repaired} interrupted running task(s).")
+        print_cli_log(f"Recovered {repaired} interrupted running task(s).")
 
     while True:
         task = next_pending(queue_file)
         if task is None:
             write_idle_status(queue_file, status_file)
-            print("\n[HARNESS] Queue empty. Drain finished.")
+            print("\n[CLI] Queue empty. Drain finished.")
             return
 
         thread_id = task["id"]
@@ -57,6 +59,7 @@ def run_drain_with_hooks(
         sandbox_dir = task_sandbox_dir(thread_id, sandbox_root)
         execution.validate_runtime(task_metadata=task_metadata)
         print_banner_fn(thread_id, sandbox_dir, task_metadata=task_metadata)
+        print_task_log("Starting queued task...", thread_id, "architect")
 
         queue_update_task(
             thread_id,
@@ -142,7 +145,7 @@ def run_drain_with_hooks(
                 error="interrupted",
                 status_path=status_file,
             )
-            print("\n[HARNESS] Interrupted. Remaining pending tasks were left untouched.")
+            print("\n[CLI] Interrupted. Remaining pending tasks were left untouched.")
             return
         except Exception as exc:
             duration = monotonic_duration(started)
@@ -190,8 +193,8 @@ def run_drain_with_hooks(
                 error=str(exc)[:200],
                 status_path=status_file,
             )
-            print(f"\n[HARNESS] Task failed: {exc}")
-            print("[HARNESS] Moving to next task...")
+            print_task_log(f"Task failed: {exc}", thread_id)
+            print_task_log("Moving to next task...", thread_id)
             continue
 
         duration = monotonic_duration(started)
@@ -257,6 +260,6 @@ def run_drain_with_hooks(
             elif output_dir:
                 migrate_sandbox_output(sandbox_dir, output_dir)
 
-        print(f"[HARNESS] Task {final_status}: {thread_id}")
+        print_task_log(f"Task {final_status}.", thread_id, result["phase"])
         if failed:
-            print("[HARNESS] Moving to next task...")
+            print_task_log("Moving to next task...", thread_id)
