@@ -1,10 +1,6 @@
 .env
-memory.json
 __pycache__/
 *.pyc
 .pytest_cache/
 .coverage
-checkpoints.db
-harness_tasks.json
-task_queue.json
-status.json
+task/

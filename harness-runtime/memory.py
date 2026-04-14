@@ -15,7 +15,7 @@ from pathlib import Path
 
 MAX_MEMORIES = 20
 
-_DEFAULT_MEMORY_FILE = str(Path(__file__).parent / "memory.json")
+_DEFAULT_MEMORY_FILE = str(Path(__file__).parent / "task" / "memory.json")
 
 
 def load_memories(path: str = _DEFAULT_MEMORY_FILE) -> list[dict]:
@@ -32,6 +32,7 @@ def load_memories(path: str = _DEFAULT_MEMORY_FILE) -> list[dict]:
 def save_memories(memories: list[dict], path: str = _DEFAULT_MEMORY_FILE) -> None:
     """Persist memories to JSON. Trims oldest if over MAX_MEMORIES."""
     trimmed = memories[-MAX_MEMORIES:]
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(trimmed, f, ensure_ascii=False, indent=2)
 

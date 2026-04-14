@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, TypeVar
 
-_DEFAULT_QUEUE_FILE = Path(__file__).parent / "task_queue.json"
+_DEFAULT_QUEUE_FILE = Path(__file__).parent / "task" / "task_queue.json"
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 _LOCK_SUFFIX = ".lock"
 _LOCK_TIMEOUT_S = 5.0

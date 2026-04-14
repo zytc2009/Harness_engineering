@@ -42,8 +42,8 @@ from runtime_support import print_banner
 from task_doc import TaskDocValidationError, validate_task_doc as runtime_validate_task_doc
 from task_queue import load_queue
 
-_QUEUE_FILE = Path(__file__).parent / "task_queue.json"
-_STATUS_FILE = Path(__file__).parent / "status.json"
+_QUEUE_FILE = Path(__file__).parent / "task" / "task_queue.json"
+_STATUS_FILE = Path(__file__).parent / "task" / "status.json"
 
 
 def _save_memory_if_present(user_input: str, tester_report: str) -> None:

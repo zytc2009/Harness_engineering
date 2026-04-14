@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-_DEFAULT_STATUS_FILE = Path(__file__).parent / "status.json"
+_DEFAULT_STATUS_FILE = Path(__file__).parent / "task" / "status.json"
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 logger = logging.getLogger(__name__)
 

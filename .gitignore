@@ -12,3 +12,4 @@ build/
 .claude/
 # Task state files
 TASK_STATE*.md
+output/
