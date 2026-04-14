@@ -82,18 +82,25 @@ def architect_phase(
     sandbox_dir: str | Path | None = None,
     task_metadata: dict | None = None,
 ) -> str:
-    """One LLM call -> design.md in sandbox."""
+    """One LLM call -> design.md (and optionally subtasks.json) in sandbox."""
     print("\n[HARNESS] Phase: architect")
     text = execution.invoke_phase("architect", [
         SystemMessage(content=get_system_prompt("architect", task_metadata=task_metadata)),
         HumanMessage(content=task),
     ], task_metadata=task_metadata)
 
-    md = re.search(r"```(?:markdown|md)?\n(.*?)```", text, re.DOTALL)
-    design = md.group(1).strip() if md else text
+    files = _parse_files(text)
+    if "design.md" in files:
+        _write_sandbox(files, sandbox_dir=sandbox_dir)
+        design = files["design.md"]
+    else:
+        md = re.search(r"```(?:markdown|md)?\n(.*?)```", text, re.DOTALL)
+        design = md.group(1).strip() if md else text
+        _write_sandbox({"design.md": design}, sandbox_dir=sandbox_dir)
 
-    _write_sandbox({"design.md": design}, sandbox_dir=sandbox_dir)
     print(f"  -> design.md written ({len(design)} chars)")
+    if "subtasks.json" in files:
+        print(f"  -> subtasks.json written ({len(files['subtasks.json'])} chars)")
     return design
 
 

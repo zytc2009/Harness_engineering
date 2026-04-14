@@ -378,6 +378,36 @@ class TestRunPipeline:
         mock_impl.assert_called_once()
 
 
+class TestArchitectPhaseFileBlocks:
+    """architect_phase must handle ## FILE: block output format."""
+
+    def test_writes_design_md_from_file_block(self, tmp_path):
+        with patch("orchestrator.execution.invoke_phase", return_value=(
+            "## FILE: design.md\n```markdown\n# My Design\n```\n"
+        )):
+            design = architect_phase("some task", sandbox_dir=tmp_path)
+        assert design == "# My Design"
+        assert (tmp_path / "design.md").read_text(encoding="utf-8") == "# My Design"
+
+    def test_writes_subtasks_json_when_present(self, tmp_path):
+        output = (
+            "## FILE: design.md\n```markdown\n# Design\n```\n\n"
+            '## FILE: subtasks.json\n```json\n[{"id":1}]\n```\n'
+        )
+        with patch("orchestrator.execution.invoke_phase", return_value=output):
+            architect_phase("task", sandbox_dir=tmp_path)
+        assert (tmp_path / "subtasks.json").exists()
+        assert (tmp_path / "subtasks.json").read_text(encoding="utf-8") == '[{"id":1}]'
+
+    def test_falls_back_to_legacy_markdown_block(self, tmp_path):
+        """Architect output without ## FILE: blocks must still work."""
+        with patch("orchestrator.execution.invoke_phase", return_value=(
+            "```markdown\n# Legacy Design\n```\nDESIGN COMPLETE"
+        )):
+            design = architect_phase("task", sandbox_dir=tmp_path)
+        assert design == "# Legacy Design"
+
+
 class TestReadSandbox:
     def test_logs_when_file_read_fails(self, tmp_path, caplog):
         good = tmp_path / "good.txt"
