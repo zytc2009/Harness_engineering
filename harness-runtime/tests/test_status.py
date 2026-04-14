@@ -24,6 +24,22 @@ class TestUpdateStatus:
         assert data["worker_state"] == "idle"
         assert data["current_task_id"] is None
 
+    def test_status_includes_subtask_fields(self, tmp_path):
+        path = tmp_path / "status.json"
+        update_status(
+            worker_state="running",
+            current_task_id="t1",
+            current_task_description="big task",
+            phase="implementer",
+            task_state="running",
+            subtask_id=2,
+            subtask_total=5,
+            status_path=path,
+        )
+        data = read_status(path)
+        assert data["subtask_id"] == 2
+        assert data["subtask_total"] == 5
+
     def test_writes_running_status_with_queue_counts(self, tmp_path):
         path = tmp_path / "status.json"
         update_status(
