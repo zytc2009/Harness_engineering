@@ -1,8 +1,11 @@
 """Git operations for subtask commit tracking."""
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _HARNESS_EMAIL = "harness@local"
 _HARNESS_NAME = "harness"
@@ -10,13 +13,17 @@ _HARNESS_NAME = "harness"
 
 def _git(directory: Path, *args: str, text: bool = False) -> subprocess.CompletedProcess:
     """Run a git command in directory, raising on non-zero exit."""
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(directory),
-        check=True,
-        capture_output=True,
-        text=text,
-    )
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(directory),
+            check=True,
+            capture_output=True,
+            text=text,
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.error("git %s failed in %s: %s", list(args), directory, exc.stderr)
+        raise
 
 
 def ensure_git_repo(directory: Path) -> None:
