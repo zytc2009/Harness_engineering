@@ -67,8 +67,9 @@ Example:
 
 Notes:
 
+- Include at least one `key: value` constraint line before enqueueing
 - Omit lines that do not apply
-- `harness` is optional
+- `harness` is optional, but the section itself is required for queueing
 - Use `harness-cpp` only when you explicitly want C++ harness constraints injected
 
 ## Open Questions

@@ -5,7 +5,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-DOC_REQUIRED_SECTIONS = ("goal", "inputs", "outputs", "acceptance criteria", "status")
+DOC_REQUIRED_SECTIONS = (
+    "goal",
+    "inputs",
+    "outputs",
+    "acceptance criteria",
+    "constraints",
+    "status",
+)
 
 
 class TaskDocValidationError(ValueError):
@@ -84,6 +91,10 @@ def validate_task_doc(doc_path: str | Path) -> tuple[Path, dict[str, str], dict[
     missing = [name for name in DOC_REQUIRED_SECTIONS if not sections.get(name)]
     if missing:
         raise TaskDocValidationError(f"Task document missing required sections: {', '.join(missing)}")
+    if not sections.get("constraints", "").strip():
+        raise TaskDocValidationError(
+            f"Task document requires a non-empty Constraints section with at least one key:value pair: {path}"
+        )
     if sections["status"].strip().lower() != "ready":
         raise TaskDocValidationError(
             f"Task document is not ready for enqueue (status '{sections['status'].strip()}'): {path}"

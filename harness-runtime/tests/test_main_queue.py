@@ -44,6 +44,8 @@ class TestHandleAdd:
                 "stdout results",
                 "## Acceptance Criteria",
                 "All provided samples pass",
+                "## Constraints",
+                "- language: python",
                 "## Status",
                 "ready",
             ]),
@@ -60,7 +62,7 @@ class TestHandleAdd:
         assert queue[0]["status"] == "pending"
         assert queue[0]["source_doc"] == str(doc_path.resolve())
         assert queue[0]["source_type"] == "task_doc"
-        assert queue[0]["constraints"] == {}
+        assert queue[0]["constraints"] == {"language": "python"}
         assert "[Goal] Build a calculator" in queue[0]["description"]
         status = read_status(status_path)
         assert status["queue_pending"] == 1
@@ -117,6 +119,8 @@ class TestHandleAdd:
                 "stdout results",
                 "## Acceptance Criteria",
                 "All provided samples pass",
+                "## Constraints",
+                "- language: cpp",
                 "## Status",
                 "draft",
             ]),
@@ -131,6 +135,40 @@ class TestHandleAdd:
                 raise AssertionError("expected ValueError")
             except ValueError as exc:
                 assert "not ready" in str(exc)
+
+        assert load_queue(queue_path) == []
+        assert read_status(status_path) is None
+
+    def test_handle_add_file_rejects_doc_without_constraints(self, tmp_path):
+        queue_path = tmp_path / "q.json"
+        status_path = tmp_path / "status.json"
+        doc_path = tmp_path / "task.md"
+        doc_path.write_text(
+            "\n".join([
+                "# Task",
+                "## Goal",
+                "Build a calculator",
+                "## Inputs",
+                "stdin expressions",
+                "## Outputs",
+                "stdout results",
+                "## Acceptance Criteria",
+                "All provided samples pass",
+                "## Status",
+                "ready",
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch("main._QUEUE_FILE", queue_path), patch("main._STATUS_FILE", status_path):
+            from main import handle_add_file
+
+            try:
+                handle_add_file(str(doc_path), max_retries=2)
+                raise AssertionError("expected ValueError")
+            except ValueError as exc:
+                assert "missing required sections" in str(exc)
+                assert "constraints" in str(exc)
 
         assert load_queue(queue_path) == []
         assert read_status(status_path) is None
@@ -339,6 +377,8 @@ class TestRunDrain:
                 "stdout",
                 "## Acceptance Criteria",
                 "works",
+                "## Constraints",
+                "- language: python",
                 "## Status",
                 "ready",
             ]),

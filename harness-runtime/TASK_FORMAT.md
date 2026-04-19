@@ -112,6 +112,9 @@ Minimum required sections:
 ## Acceptance Criteria
 <how to know it is done>
 
+## Constraints
+<at least one key:value line describing the execution or stack constraints>
+
 ## Status
 ready
 ```
@@ -119,10 +122,9 @@ ready
 Common optional sections:
 
 - `Scope`
-- `Constraints`
 - `Open Questions`
 
-Only task documents with `Status: ready` should be enqueued.
+Only task documents with `Status: ready` and a non-empty `Constraints` section should be enqueued.
 
 ## Queue And Status Semantics
 
